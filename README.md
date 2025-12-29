@@ -95,6 +95,22 @@ Side-table tracking of object attribute layouts enables fast attribute access op
 ### Call-Boundary Elimination
 Profile-guided inlining of hot call sites eliminates function call overhead (~50-200ns per call). The system detects monomorphic call sites, generates guarded inline code, and employs trampolines to safely dispatch between native optimized paths and Python fallbacks while preserving full semantics.
 
+### Adaptive Compilation
+Unified compilation system that combines multiple optimization strategies:
+- **Type Hint Integration**: When PEP 484 type hints are present, functions are compiled immediately without profiling warmup
+- **Continuous PGO**: Runtime monitoring detects type drift and triggers recompilation when guard failure rates exceed thresholds
+- **Source Hash Tracking**: Cache invalidation on code changes ensures recompilation when source is modified
+
+```python
+from pyaot import adaptive
+
+@adaptive
+def multiply(a: float, b: float) -> float:
+    return a * b
+
+result = multiply(3.0, 4.0)  # Executes via native LLVM code
+```
+
 ### Artifact Caching
 Content-addressed persistent cache for compiled artifacts. Supports ABI validation, LRU eviction, and cross-session reuse.
 

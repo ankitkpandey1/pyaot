@@ -17,7 +17,8 @@ PyAOT implements a profile-guided ahead-of-time (AOT) compilation system for Pyt
    - [Shape System](#34-shape-system)
    - [Compiler Subsystem](#35-compiler-subsystem)
    - [Inline Subsystem](#36-inline-subsystem)
-   - [Cache Subsystem](#37-cache-subsystem)
+   - [Adaptive Subsystem](#37-adaptive-subsystem)
+   - [Cache Subsystem](#38-cache-subsystem)
 4. [Data Flow](#4-data-flow)
 5. [Design Decisions](#5-design-decisions)
 6. [Comparison with Related Systems](#6-comparison-with-related-systems)
@@ -456,7 +457,69 @@ def trampoline(*args):
 
 This ensures that if assumptions are violated (e.g., passing a string to a numeric function), execution transparently falls back to the original Python implementation.
 
-### 3.7 Cache Subsystem
+### 3.7 Adaptive Subsystem
+
+**Location**: `pyaot/adaptive.py`, `pyaot/hints.py`
+
+The adaptive subsystem provides unified compilation combining type hints, profiling, and continuous monitoring.
+
+#### Type Hint Integration
+
+When PEP 484 type annotations are present, functions can be compiled immediately without profiling warmup:
+
+```python
+from pyaot import adaptive
+
+@adaptive
+def multiply(a: float, b: float) -> float:
+    return a * b
+
+# Compiled immediately from type hints
+result = multiply(3.0, 4.0)  # Executes via native LLVM code
+```
+
+The `TypeHintExtractor` extracts annotations and maps them to IR types:
+- `float` → `IRTypeKind.FLOAT64`
+- `int` → `IRTypeKind.INT64`
+- `bool` → `IRTypeKind.BOOL`
+
+#### Continuous PGO
+
+Runtime monitoring tracks guard failures to detect type drift:
+
+```python
+if artifact.guard_failure_rate > drift_threshold:
+    # Type drift detected, trigger recompilation
+    recompile(artifact)
+```
+
+#### Source Hash Tracking
+
+Source code changes invalidate cached artifacts:
+
+```python
+current_hash = compute_source_hash(func)
+if current_hash != artifact.source_hash:
+    invalidate_cache(func)
+```
+
+#### Architecture
+
+```mermaid
+graph TD
+    TH[Type Hints] --> AC[AdaptiveCompiler]
+    PR[Profiler] --> AC
+    AC --> IR[IR Generation]
+    IR --> LLVM[LLVM Codegen]
+    LLVM --> NA[NativeArtifact]
+    NA --> GUARD[Guard Checker]
+    GUARD -->|pass| FAST[Fast Path]
+    GUARD -->|fail| FB[Python Fallback]
+    GUARD --> MON[Drift Monitor]
+    MON -->|drift detected| AC
+```
+
+### 3.8 Cache Subsystem
 
 **Location**: `pyaot/cache/`
 
