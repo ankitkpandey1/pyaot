@@ -1,3 +1,47 @@
+Metadata-Version: 2.4
+Name: pyaot
+Version: 0.1.0
+Summary: Profile-Guided Ahead-of-Time Compilation for Python Hot Paths
+Author: PyAOT Contributors
+License: Apache-2.0
+Project-URL: Homepage, https://github.com/pyaot/pyaot
+Project-URL: Documentation, https://github.com/pyaot/pyaot#readme
+Project-URL: Repository, https://github.com/pyaot/pyaot
+Project-URL: Issues, https://github.com/pyaot/pyaot/issues
+Keywords: aot,compilation,performance,optimization,profiling,llvm
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Operating System :: POSIX :: Linux
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Software Development :: Compilers
+Classifier: Topic :: System :: Performance
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Provides-Extra: llvm
+Requires-Dist: llvmlite>=0.40.0; extra == "llvm"
+Provides-Extra: cli
+Requires-Dist: click>=8.0; extra == "cli"
+Provides-Extra: numpy
+Requires-Dist: numpy>=1.20; extra == "numpy"
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: pytest-benchmark>=4.0; extra == "dev"
+Requires-Dist: hypothesis>=6.0; extra == "dev"
+Requires-Dist: llvmlite>=0.40.0; extra == "dev"
+Requires-Dist: click>=8.0; extra == "dev"
+Requires-Dist: numpy>=1.20; extra == "dev"
+Provides-Extra: all
+Requires-Dist: llvmlite>=0.40.0; extra == "all"
+Requires-Dist: click>=8.0; extra == "all"
+Requires-Dist: numpy>=1.20; extra == "all"
+Dynamic: license-file
+
 # PyAOT
 
 **Profile-Guided Ahead-of-Time Compilation for Python Hot Paths**

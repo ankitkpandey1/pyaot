@@ -1,0 +1,3 @@
+[console_scripts]
+aot = pyaot.cli:main
+pyaot = pyaot.cli:main

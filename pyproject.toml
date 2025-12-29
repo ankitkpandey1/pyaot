@@ -1,0 +1,92 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyaot"
+version = "0.1.0"
+description = "Profile-Guided Ahead-of-Time Compilation for Python Hot Paths"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "PyAOT Contributors"}
+]
+keywords = [
+    "aot",
+    "compilation",
+    "performance",
+    "optimization",
+    "profiling",
+    "llvm",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Compilers",
+    "Topic :: System :: Performance",
+]
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+llvm = ["llvmlite>=0.40.0"]
+cli = ["click>=8.0"]
+numpy = ["numpy>=1.20"]
+dev = [
+    "pytest>=7.0",
+    "pytest-benchmark>=4.0",
+    "hypothesis>=6.0",
+    "llvmlite>=0.40.0",
+    "click>=8.0",
+    "numpy>=1.20",
+]
+all = [
+    "llvmlite>=0.40.0",
+    "click>=8.0",
+    "numpy>=1.20",
+]
+
+[project.scripts]
+pyaot = "pyaot.cli:main"
+aot = "pyaot.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/pyaot/pyaot"
+Documentation = "https://github.com/pyaot/pyaot#readme"
+Repository = "https://github.com/pyaot/pyaot"
+Issues = "https://github.com/pyaot/pyaot/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pyaot*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow",
+    "benchmark: marks benchmarks",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py39", "py310", "py311", "py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

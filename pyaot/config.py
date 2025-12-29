@@ -1,0 +1,130 @@
+"""
+Configuration management for PyAOT.
+
+Supports environment variables and programmatic configuration.
+All metrics collection is disabled by default per specification.
+"""
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+import logging
+
+
+@dataclass
+class Config:
+    """Central configuration for PyAOT system.
+    
+    Attributes:
+        enabled: Master switch for AOT compilation
+        cache_dir: Directory for artifact cache
+        log_level: Logging verbosity
+        sample_rate: Profiling sample rate (1/N calls sampled)
+        min_call_count: Minimum calls for eligibility
+        min_stability_score: Minimum stability score for eligibility
+        guard_overhead_budget: Maximum guard overhead as fraction of call time
+        metrics_enabled: Enable detailed metrics collection (off by default)
+    """
+    
+    # Master switch
+    enabled: bool = True
+    
+    # Cache configuration
+    cache_dir: Path = field(default_factory=lambda: Path.home() / ".aot_cache")
+    
+    # Logging
+    log_level: int = logging.WARNING
+    
+    # Profiling (sampled by default to maintain <5% overhead)
+    sample_rate: int = 1000  # Sample 1 in N calls
+    metrics_enabled: bool = False  # Disabled by default per spec
+    
+    # Selection thresholds (per specification)
+    min_call_count: int = 100
+    min_stability_score: float = 0.95
+    
+    # Guard configuration
+    guard_overhead_budget: float = 0.05  # 5% max guard overhead
+    
+    # Compilation
+    max_variants_per_function: int = 4
+    lru_cache_size: int = 128
+    
+    def __post_init__(self):
+        """Ensure cache directory exists."""
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+
+# Global configuration singleton
+_config: Optional[Config] = None
+
+
+def get_config() -> Config:
+    """Get or create the global configuration."""
+    global _config
+    if _config is None:
+        _config = load_config_from_env()
+    return _config
+
+
+def set_config(config: Config) -> None:
+    """Set the global configuration."""
+    global _config
+    _config = config
+
+
+def load_config_from_env() -> Config:
+    """Load configuration from environment variables.
+    
+    Environment Variables:
+        AOT_DISABLED: Set to "1" to disable AOT compilation
+        AOT_CACHE_DIR: Custom cache directory path
+        AOT_LOG_LEVEL: Logging level (DEBUG, INFO, WARNING, ERROR)
+        AOT_SAMPLE_RATE: Profiling sample rate (1 in N)
+        AOT_MIN_CALLS: Minimum call count threshold
+        AOT_MIN_STABILITY: Minimum stability score (0.0-1.0)
+        AOT_METRICS_ENABLED: Set to "1" to enable metrics
+    """
+    config = Config()
+    
+    # Master switch
+    if os.environ.get("AOT_DISABLED", "0") == "1":
+        config.enabled = False
+    
+    # Cache directory
+    if cache_dir := os.environ.get("AOT_CACHE_DIR"):
+        config.cache_dir = Path(cache_dir)
+    
+    # Logging level
+    log_level_str = os.environ.get("AOT_LOG_LEVEL", "WARNING").upper()
+    level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+    }
+    config.log_level = level_map.get(log_level_str, logging.WARNING)
+    
+    # Profiling
+    if sample_rate := os.environ.get("AOT_SAMPLE_RATE"):
+        config.sample_rate = max(1, int(sample_rate))
+    
+    # Selection thresholds
+    if min_calls := os.environ.get("AOT_MIN_CALLS"):
+        config.min_call_count = max(1, int(min_calls))
+    
+    if min_stability := os.environ.get("AOT_MIN_STABILITY"):
+        config.min_stability_score = max(0.0, min(1.0, float(min_stability)))
+    
+    # Metrics (disabled by default, must explicitly enable)
+    if os.environ.get("AOT_METRICS_ENABLED", "0") == "1":
+        config.metrics_enabled = True
+    
+    return config
+
+
+def reset_config() -> None:
+    """Reset configuration to defaults. Useful for testing."""
+    global _config
+    _config = None
