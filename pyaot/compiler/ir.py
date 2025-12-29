@@ -20,6 +20,7 @@ class IRTypeKind(Enum):
     FLOAT64 = auto()
     PTR = auto()      # Generic pointer
     ARRAY = auto()    # Array type (includes shape info)
+    PYOBJ = auto()    # Python object pointer (PyObject*)
 
 
 @dataclass
@@ -56,6 +57,11 @@ class IRType:
     @classmethod
     def array(cls, element_type: "IRType", shape: Optional[tuple] = None) -> "IRType":
         return cls(kind=IRTypeKind.ARRAY, element_type=element_type, shape=shape)
+    
+    @classmethod
+    def pyobj(cls) -> "IRType":
+        """Python object pointer (PyObject*)."""
+        return cls(kind=IRTypeKind.PYOBJ)
     
     def to_llvm_str(self) -> str:
         """Get LLVM type string."""
@@ -135,6 +141,19 @@ class Opcode(Enum):
     ARRAY_LOAD = auto()   # Load from array
     ARRAY_STORE = auto()  # Store to array
     ARRAY_LEN = auto()    # Get array length
+    
+    # Object operations (Phase 3)
+    GETATTR = auto()      # Get attribute from object
+    SETATTR = auto()      # Set attribute on object
+    GET_TYPE = auto()     # Get type of object (Py_TYPE)
+    
+    # Guard operations (Phase 3)
+    GUARD_TYPE = auto()   # Guard: type(obj) is expected_type
+    GUARD_FAIL = auto()   # Branch to fallback on guard failure
+    
+    # Python interop
+    BOX = auto()          # Box native value to PyObject
+    UNBOX = auto()        # Unbox PyObject to native value
 
 
 @dataclass

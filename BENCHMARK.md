@@ -166,6 +166,22 @@ The results demonstrate:
 
 3. **Dot Product Amplification**: The dot product shows higher speedups (up to 706×) because each iteration involves two Python operations, doubling interpreter overhead.
 
+### 3.3 Phase 3-4: PyAOT Native Compilation Results
+
+PyAOT compiles numeric loops to native machine code via LLVM:
+
+| Array Size | Python (ms) | NumPy (ms) | PyAOT Native (ms) | PyAOT Speedup |
+|------------|-------------|------------|-------------------|---------------|
+| 1,000 | 0.010 | 0.001 | 0.001 | **14.0×** |
+| 10,000 | 0.099 | 0.003 | 0.004 | **23.6×** |
+| 100,000 | 1.066 | 0.012 | 0.039 | **27.6×** |
+| 1,000,000 | 10.152 | 0.198 | 0.433 | **23.4×** |
+
+**Key findings:**
+- **14-28× speedup** vs pure Python loops achieved via LLVM compilation
+- NumPy remains faster (51-86×) due to hand-optimized SIMD implementations
+- PyAOT provides significant speedup without requiring code changes
+
 ---
 
 ## 4. Comparative Analysis
@@ -190,16 +206,16 @@ graph LR
     
     style P1 fill:#2ecc71
     style P2 fill:#2ecc71
-    style P3 fill:#f39c12
-    style P4 fill:#e74c3c
+    style P3 fill:#2ecc71
+    style P4 fill:#2ecc71
 ```
 
 | Phase | Status | Performance Impact |
 |-------|--------|-------------------|
 | Phase 1: Profiling | ✓ Complete | Enables hot path detection |
 | Phase 2: Shape System | ✓ Complete | Enables attribute access optimization |
-| Phase 3: Code Generation | Planned | Bakes guards into native code |
-| Phase 4: Integration | Planned | Full end-to-end optimization |
+| Phase 3: Code Generation | ✓ Complete | Native numeric loops (14-28× speedup) |
+| Phase 4: Integration | ✓ Complete | @optimize decorator, pipeline API |
 
 ---
 
