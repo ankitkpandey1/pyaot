@@ -6,6 +6,8 @@ pyaot/__init__.py
 pyaot/config.py
 pyaot/exceptions.py
 pyaot/logging.py
+pyaot/pipeline.py
+pyaot/runner.py
 pyaot.egg-info/PKG-INFO
 pyaot.egg-info/SOURCES.txt
 pyaot.egg-info/dependency_links.txt
@@ -20,9 +22,18 @@ pyaot/cli/__init__.py
 pyaot/cli/main.py
 pyaot/compiler/__init__.py
 pyaot/compiler/codegen.py
+pyaot/compiler/inline_codegen.py
 pyaot/compiler/ir.py
 pyaot/compiler/lowering.py
 pyaot/compiler/numpy_support.py
+pyaot/inline/__init__.py
+pyaot/inline/callsite.py
+pyaot/inline/eligibility.py
+pyaot/inline/expansion.py
+pyaot/inline/guards.py
+pyaot/inline/ir_inline.py
+pyaot/inline/telemetry.py
+pyaot/inline/trampoline.py
 pyaot/profiler/__init__.py
 pyaot/profiler/collector.py
 pyaot/profiler/context.py
@@ -43,6 +54,8 @@ pyaot/types/guards.py
 pyaot/types/inference.py
 tests/test_cache.py
 tests/test_guards.py
+tests/test_inline.py
+tests/test_phase5.py
 tests/test_profiler.py
 tests/test_selector.py
 tests/test_shapes.py

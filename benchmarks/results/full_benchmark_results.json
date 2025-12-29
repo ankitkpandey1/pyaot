@@ -1,0 +1,314 @@
+{
+  "system_info": {
+    "python_version": "3.13.3",
+    "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.41",
+    "processor": "x86_64",
+    "cpu_count": "16",
+    "timestamp": "2025-12-29T18:17:43.369998",
+    "numpy_version": "2.3.5",
+    "numba_version": "0.63.1"
+  },
+  "timestamp": "2025-12-29T18:17:43.370326",
+  "results": [
+    {
+      "benchmark": "numeric_sum",
+      "configuration": "Python (loop)",
+      "size": 1000,
+      "mean_ms": 0.01186935,
+      "median_ms": 0.009723,
+      "std_ms": 0.009502246212426773,
+      "min_ms": 0.009673,
+      "max_ms": 0.052238
+    },
+    {
+      "benchmark": "numeric_sum",
+      "configuration": "Python (builtin)",
+      "size": 1000,
+      "mean_ms": 0.00382715,
+      "median_ms": 0.003821,
+      "std_ms": 3.120943683196512e-05,
+      "min_ms": 0.003791,
+      "max_ms": 0.003911
+    },
+    {
+      "benchmark": "numeric_sum",
+      "configuration": "NumPy",
+      "size": 1000,
+      "mean_ms": 0.0012888,
+      "median_ms": 0.001252,
+      "std_ms": 0.0001021673549674877,
+      "min_ms": 0.001217,
+      "max_ms": 0.001598
+    },
+    {
+      "benchmark": "numeric_sum",
+      "configuration": "Python (loop)",
+      "size": 10000,
+      "mean_ms": 0.09470785,
+      "median_ms": 0.094386,
+      "std_ms": 0.0021766342988781173,
+      "min_ms": 0.093395,
+      "max_ms": 0.103441
+    },
+    {
+      "benchmark": "numeric_sum",
+      "configuration": "Python (builtin)",
+      "size": 10000,
+      "mean_ms": 0.0373722,
+      "median_ms": 0.036021,
+      "std_ms": 0.004728943095449553,
+      "min_ms": 0.03588,
+      "max_ms": 0.056542
+    },
+    {
+      "benchmark": "numeric_sum",
+      "configuration": "NumPy",
+      "size": 10000,
+      "mean_ms": 0.00218605,
+      "median_ms": 0.002163,
+      "std_ms": 8.968099898499889e-05,
+      "min_ms": 0.002123,
+      "max_ms": 0.002506
+    },
+    {
+      "benchmark": "numeric_sum",
+      "configuration": "Python (loop)",
+      "size": 100000,
+      "mean_ms": 0.9339265,
+      "median_ms": 0.927209,
+      "std_ms": 0.019717015823901944,
+      "min_ms": 0.916216,
+      "max_ms": 0.988279
+    },
+    {
+      "benchmark": "numeric_sum",
+      "configuration": "Python (builtin)",
+      "size": 100000,
+      "mean_ms": 0.36074155,
+      "median_ms": 0.3572035,
+      "std_ms": 0.00651995300657103,
+      "min_ms": 0.356237,
+      "max_ms": 0.375506
+    },
+    {
+      "benchmark": "numeric_sum",
+      "configuration": "NumPy",
+      "size": 100000,
+      "mean_ms": 0.01319505,
+      "median_ms": 0.0116665,
+      "std_ms": 0.005127618555430971,
+      "min_ms": 0.011541,
+      "max_ms": 0.033878
+    },
+    {
+      "benchmark": "numeric_sum",
+      "configuration": "Python (loop)",
+      "size": 1000000,
+      "mean_ms": 9.382581,
+      "median_ms": 9.357617000000001,
+      "std_ms": 0.06628492245879462,
+      "min_ms": 9.303973,
+      "max_ms": 9.544722
+    },
+    {
+      "benchmark": "numeric_sum",
+      "configuration": "Python (builtin)",
+      "size": 1000000,
+      "mean_ms": 3.67462185,
+      "median_ms": 3.6722910000000004,
+      "std_ms": 0.01799104285697688,
+      "min_ms": 3.650709,
+      "max_ms": 3.704488
+    },
+    {
+      "benchmark": "numeric_sum",
+      "configuration": "NumPy",
+      "size": 1000000,
+      "mean_ms": 0.10609645,
+      "median_ms": 0.1041495,
+      "std_ms": 0.0037412306232462856,
+      "min_ms": 0.103324,
+      "max_ms": 0.117975
+    },
+    {
+      "benchmark": "call_inner",
+      "configuration": "Python (calls)",
+      "size": 10000,
+      "mean_ms": 0.21080485,
+      "median_ms": 0.2032275,
+      "std_ms": 0.01531279284669486,
+      "min_ms": 0.199726,
+      "max_ms": 0.256918
+    },
+    {
+      "benchmark": "call_inner",
+      "configuration": "Inlined",
+      "size": 10000,
+      "mean_ms": 0.15309595,
+      "median_ms": 0.14904050000000002,
+      "std_ms": 0.008845235925418598,
+      "min_ms": 0.146972,
+      "max_ms": 0.17582
+    },
+    {
+      "benchmark": "call_inner",
+      "configuration": "Python (calls)",
+      "size": 100000,
+      "mean_ms": 2.04683005,
+      "median_ms": 2.0442885,
+      "std_ms": 0.03729084714493414,
+      "min_ms": 2.011653,
+      "max_ms": 2.133773
+    },
+    {
+      "benchmark": "call_inner",
+      "configuration": "Inlined",
+      "size": 100000,
+      "mean_ms": 1.5068266,
+      "median_ms": 1.4976365,
+      "std_ms": 0.027147345345452534,
+      "min_ms": 1.47529,
+      "max_ms": 1.564547
+    },
+    {
+      "benchmark": "call_inner",
+      "configuration": "Python (calls)",
+      "size": 1000000,
+      "mean_ms": 21.1435146,
+      "median_ms": 21.1583275,
+      "std_ms": 0.13940964434183092,
+      "min_ms": 20.941485,
+      "max_ms": 21.465591
+    },
+    {
+      "benchmark": "call_inner",
+      "configuration": "Inlined",
+      "size": 1000000,
+      "mean_ms": 15.22593695,
+      "median_ms": 15.073732,
+      "std_ms": 0.6445558256336376,
+      "min_ms": 14.9835,
+      "max_ms": 17.947912
+    },
+    {
+      "benchmark": "call_chain",
+      "configuration": "Python (calls)",
+      "size": 10000,
+      "mean_ms": 0.35686525,
+      "median_ms": 0.3527035,
+      "std_ms": 0.008073666224376108,
+      "min_ms": 0.350432,
+      "max_ms": 0.376777
+    },
+    {
+      "benchmark": "call_chain",
+      "configuration": "Inlined",
+      "size": 10000,
+      "mean_ms": 0.2389203,
+      "median_ms": 0.2354205,
+      "std_ms": 0.007872002507888989,
+      "min_ms": 0.231965,
+      "max_ms": 0.261131
+    },
+    {
+      "benchmark": "call_chain",
+      "configuration": "Python (calls)",
+      "size": 100000,
+      "mean_ms": 3.5649542,
+      "median_ms": 3.5647455,
+      "std_ms": 0.020126735695272825,
+      "min_ms": 3.519637,
+      "max_ms": 3.59854
+    },
+    {
+      "benchmark": "call_chain",
+      "configuration": "Inlined",
+      "size": 100000,
+      "mean_ms": 2.4159686000000002,
+      "median_ms": 2.387031,
+      "std_ms": 0.1263759895959588,
+      "min_ms": 2.35297,
+      "max_ms": 2.942157
+    },
+    {
+      "benchmark": "monte_carlo",
+      "configuration": "Python (calls)",
+      "size": 100000,
+      "mean_ms": 7.07792285,
+      "median_ms": 6.7492145,
+      "std_ms": 0.7431974539353783,
+      "min_ms": 6.708297,
+      "max_ms": 9.678683
+    },
+    {
+      "benchmark": "monte_carlo",
+      "configuration": "Inlined",
+      "size": 100000,
+      "mean_ms": 5.9882576499999995,
+      "median_ms": 5.982621,
+      "std_ms": 0.018892429247480275,
+      "min_ms": 5.960486,
+      "max_ms": 6.041224
+    },
+    {
+      "benchmark": "monte_carlo",
+      "configuration": "Python (calls)",
+      "size": 1000000,
+      "mean_ms": 68.09949945,
+      "median_ms": 68.0767535,
+      "std_ms": 0.19939981162781395,
+      "min_ms": 67.661517,
+      "max_ms": 68.524467
+    },
+    {
+      "benchmark": "monte_carlo",
+      "configuration": "Inlined",
+      "size": 1000000,
+      "mean_ms": 60.32402485,
+      "median_ms": 60.253811999999996,
+      "std_ms": 0.2565716602058104,
+      "min_ms": 59.924046,
+      "max_ms": 61.052506
+    },
+    {
+      "benchmark": "etl_pipeline",
+      "configuration": "Python (calls)",
+      "size": 100000,
+      "mean_ms": 3.0175812,
+      "median_ms": 2.962078,
+      "std_ms": 0.12390051623510821,
+      "min_ms": 2.938618,
+      "max_ms": 3.329712
+    },
+    {
+      "benchmark": "etl_pipeline",
+      "configuration": "Inlined",
+      "size": 100000,
+      "mean_ms": 2.29333695,
+      "median_ms": 2.294063,
+      "std_ms": 0.030342200517769466,
+      "min_ms": 2.244358,
+      "max_ms": 2.346534
+    },
+    {
+      "benchmark": "etl_pipeline",
+      "configuration": "Python (calls)",
+      "size": 1000000,
+      "mean_ms": 35.35672025,
+      "median_ms": 35.497946,
+      "std_ms": 1.1548470289073776,
+      "min_ms": 33.397932,
+      "max_ms": 37.33182
+    },
+    {
+      "benchmark": "etl_pipeline",
+      "configuration": "Inlined",
+      "size": 1000000,
+      "mean_ms": 25.3949395,
+      "median_ms": 25.053815999999998,
+      "std_ms": 1.1024086319840756,
+      "min_ms": 24.265879,
+      "max_ms": 27.673857
+    }
+  ]
+}

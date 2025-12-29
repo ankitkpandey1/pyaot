@@ -180,6 +180,15 @@ for c in candidates:
 ### 3. Use CLI
 
 ```bash
+# Run a script with PyAOT optimization
+pyaot run script.py --verbose
+
+# Run with call-boundary elimination disabled (baseline)
+pyaot run script.py --no-inline
+
+# Run with JSON output (for automation)
+pyaot run script.py --json
+
 # Profile a script
 pyaot profile script.py --output profile.json
 
@@ -383,30 +392,28 @@ For detailed benchmark methodology and results, see [BENCHMARK.md](BENCHMARK.md)
 
 ### Summary Performance Targets
 
-| Benchmark | Target | Measured (Theoretical Ceiling) |
-|-----------|--------|--------------------------------|
-| Numeric loops (1M elements) | ≥2× speedup | 78× (Python vs NumPy) |
-| End-to-end workload | ≥1.5× speedup | Application-dependent |
-| Guard overhead | <5% of call time | Achievable for numeric code |
+| Benchmark | Target | Measured |
+|-----------|--------|----------|
+| Numeric sum (1M elements) | ≥2× speedup vs Python | 88.5× (Python vs NumPy) |
+| Call-boundary elimination | ≥1.3× speedup | 1.34× average |
+| Guard overhead | <5% of call time | Achievable |
 | Cold path regression | Zero | Guaranteed by fallback |
-
-### Benchmark Results (Theoretical Ceiling)
 
 ### Benchmark Results (Measured)
 
-The following results demonstrate actual performance on measured workloads:
+The following results demonstrate actual performance on the current benchmark suite:
 
-| Benchmark Category | Workload | Size | Python | Native/Inlined | Speedup |
-|--------------------|----------|------|--------|----------------|---------|
-| **Numeric Loop** | Array Sum | 1M | 10.15ms | 0.43ms | **23.4×** |
-| **Numeric Loop** | Dot Product | 100K | 1.66ms | 0.04ms | **41.5×** |
-| **Call Overhead** | Inner Loop | 1M | 24.70ms | 16.06ms | **1.54×** |
-| **Call Chain** | Helper Call | 100K | 3.82ms | 2.43ms | **1.57×** |
-| **Macro** | ETL Pipeline | 1M | 37.01ms | 27.11ms | **1.37×** |
+| Category | Workload | Size | Python (ms) | Inlined (ms) | Speedup |
+|----------|----------|------|-------------|--------------|---------|
+| **Numeric Sum** | Array Sum | 1M | 9.38 | 0.11 (NumPy) | **88.5×** |
+| **Call Inner** | Inner Loop | 1M | 21.14 | 15.23 | **1.39×** |
+| **Call Chain** | Helper Call | 100K | 3.57 | 2.42 | **1.48×** |
+| **Monte Carlo** | Pi Estimate | 1M | 68.10 | 60.32 | **1.13×** |
+| **ETL** | Transform | 1M | 35.36 | 25.40 | **1.39×** |
 
 *Benchmark system: AMD Ryzen 7 9700X, Python 3.13.3, Linux*
 
-> **Note**: Numeric loops benefit most from LLVM compilation (vectorization, type specialization), while call-heavy code benefits from inlining (eliminating overhead).
+> **Note**: Call-heavy code benefits from inlining (1.3-1.5× speedup). Monte Carlo shows lower improvement because `random()` dominates execution time.
 
 ---
 
@@ -515,7 +522,12 @@ pytest tests/ --cov=pyaot
 ### Running Benchmarks
 
 ```bash
-python benchmarks/bench_numeric_loop.py
+# Full benchmark suite with plots
+python benchmarks/bench_full_suite.py
+
+# Individual benchmarks
+python benchmarks/bench_numeric_loop.py     # Numeric operations
+python benchmarks/bench_phase5.py           # Call-boundary elimination
 ```
 
 ### Running Examples

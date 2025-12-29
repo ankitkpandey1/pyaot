@@ -8,7 +8,7 @@ enabling safe fallback to Python when guards fail.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional, Tuple, Type
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 import sys
 
 from pyaot.shapes.shape import Shape
@@ -47,10 +47,21 @@ class InlineGuardSet:
     
     # Global/module version (for detecting module reloads)
     global_version: int = 0
+    module_version_key: Optional[str] = None  # e.g., "module:mymodule"
     
     # Statistics
     check_count: int = field(default=0, repr=False)
     failure_count: int = field(default=0, repr=False)
+    
+    # Per-guard failure tracking
+    callee_failures: int = field(default=0, repr=False)
+    receiver_failures: int = field(default=0, repr=False)
+    arg_type_failures: int = field(default=0, repr=False)
+    shape_failures: int = field(default=0, repr=False)
+    version_failures: int = field(default=0, repr=False)
+    
+    # Timing stats
+    total_check_time_ns: int = field(default=0, repr=False)
     
     def check_callee(self, callee: Callable) -> bool:
         """Check if callee matches expected."""
@@ -94,6 +105,38 @@ class InlineGuardSet:
         
         return True
     
+    def check_version(self) -> bool:
+        """Check if module version is still valid."""
+        # For Phase 5, this is a placeholder - actual implementation
+        # would track module reload counters
+        return True
+    
+    def check_fast(
+        self,
+        callee: Callable,
+        args: Tuple[Any, ...],
+    ) -> bool:
+        """
+        Fast guard check with minimal branching.
+        
+        Optimized for the hot path - checks are ordered by
+        likelihood of failure and cost.
+        """
+        # Most likely to fail: callee identity
+        if id(callee) != self.expected_callee_id:
+            return False
+        
+        # Cheap check: arg count
+        if self.expected_arg_types:
+            if len(args) != len(self.expected_arg_types):
+                return False
+            # Type identity checks (very fast)
+            for i, expected in enumerate(self.expected_arg_types):
+                if type(args[i]) is not expected:
+                    return False
+        
+        return True
+    
     def check_all(
         self,
         callee: Callable,
@@ -106,24 +149,42 @@ class InlineGuardSet:
         Returns True only if all guards pass.
         Updates statistics.
         """
+        import time
+        start = time.perf_counter_ns()
+        
         self.check_count += 1
         
         if not self.check_callee(callee):
             self.failure_count += 1
+            self.callee_failures += 1
+            self.total_check_time_ns += time.perf_counter_ns() - start
             return False
         
         if not self.check_receiver_type(receiver):
             self.failure_count += 1
+            self.receiver_failures += 1
+            self.total_check_time_ns += time.perf_counter_ns() - start
             return False
         
         if not self.check_arg_types(args):
             self.failure_count += 1
+            self.arg_type_failures += 1
+            self.total_check_time_ns += time.perf_counter_ns() - start
             return False
         
         if not self.check_shapes(args):
             self.failure_count += 1
+            self.shape_failures += 1
+            self.total_check_time_ns += time.perf_counter_ns() - start
             return False
         
+        if not self.check_version():
+            self.failure_count += 1
+            self.version_failures += 1
+            self.total_check_time_ns += time.perf_counter_ns() - start
+            return False
+        
+        self.total_check_time_ns += time.perf_counter_ns() - start
         return True
     
     @property
@@ -132,6 +193,38 @@ class InlineGuardSet:
         if self.check_count == 0:
             return 0.0
         return self.failure_count / self.check_count
+    
+    @property
+    def avg_check_time_ns(self) -> float:
+        """Average guard check time in nanoseconds."""
+        if self.check_count == 0:
+            return 0.0
+        return self.total_check_time_ns / self.check_count
+    
+    def get_metrics(self) -> "GuardMetrics":
+        """Get guard metrics for telemetry."""
+        return GuardMetrics(
+            check_count=self.check_count,
+            failure_count=self.failure_count,
+            failure_rate=self.failure_rate,
+            callee_failures=self.callee_failures,
+            receiver_failures=self.receiver_failures,
+            arg_type_failures=self.arg_type_failures,
+            shape_failures=self.shape_failures,
+            version_failures=self.version_failures,
+            avg_check_time_ns=self.avg_check_time_ns,
+        )
+    
+    def reset_stats(self) -> None:
+        """Reset all statistics."""
+        self.check_count = 0
+        self.failure_count = 0
+        self.callee_failures = 0
+        self.receiver_failures = 0
+        self.arg_type_failures = 0
+        self.shape_failures = 0
+        self.version_failures = 0
+        self.total_check_time_ns = 0
     
     def to_dict(self) -> dict:
         """Serialize to dictionary."""
@@ -152,6 +245,42 @@ class InlineGuardSet:
             "global_version": self.global_version,
             "check_count": self.check_count,
             "failure_count": self.failure_count,
+            "failure_rate": self.failure_rate,
+            "failures_by_type": {
+                "callee": self.callee_failures,
+                "receiver": self.receiver_failures,
+                "arg_type": self.arg_type_failures,
+                "shape": self.shape_failures,
+                "version": self.version_failures,
+            },
+        }
+
+
+@dataclass
+class GuardMetrics:
+    """Metrics about guard performance for telemetry."""
+    check_count: int = 0
+    failure_count: int = 0
+    failure_rate: float = 0.0
+    callee_failures: int = 0
+    receiver_failures: int = 0
+    arg_type_failures: int = 0
+    shape_failures: int = 0
+    version_failures: int = 0
+    avg_check_time_ns: float = 0.0
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dictionary."""
+        return {
+            "check_count": self.check_count,
+            "failure_count": self.failure_count,
+            "failure_rate": self.failure_rate,
+            "callee_failures": self.callee_failures,
+            "receiver_failures": self.receiver_failures,
+            "arg_type_failures": self.arg_type_failures,
+            "shape_failures": self.shape_failures,
+            "version_failures": self.version_failures,
+            "avg_check_time_ns": self.avg_check_time_ns,
         }
 
 

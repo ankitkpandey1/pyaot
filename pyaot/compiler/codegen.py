@@ -59,8 +59,9 @@ class LLVMCodegen:
                 phase="codegen",
             )
         
-        # Initialize LLVM
-        llvm.initialize()
+        # Initialize LLVM targets (required for llvmlite 0.46+)
+        # Note: llvm.initialize() is deprecated - use specific initializers
+        llvm.initialize_all_targets()
         llvm.initialize_native_target()
         llvm.initialize_native_asmprinter()
         

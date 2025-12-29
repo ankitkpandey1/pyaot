@@ -249,33 +249,91 @@ if CLICK_AVAILABLE:
 
     @cli.command()
     @click.argument("script", type=click.Path(exists=True))
+    @click.argument("args", nargs=-1)
     @click.option(
-        "--enabled/--disabled",
+        "--inline/--no-inline",
         default=True,
-        help="Run with AOT enabled or disabled."
+        help="Enable/disable call-boundary elimination (inlining)."
     )
-    def run(script: str, enabled: bool):
-        """Run a Python script with AOT compilation.
+    @click.option(
+        "--verbose", "-v",
+        is_flag=True,
+        help="Print progress messages."
+    )
+    @click.option(
+        "--json",
+        "json_output",
+        is_flag=True,
+        help="Output results as JSON."
+    )
+    @click.option(
+        "--min-calls",
+        type=int,
+        default=100,
+        help="Minimum calls for inline eligibility."
+    )
+    @click.option(
+        "--profile-iterations",
+        type=int,
+        default=1,
+        help="Number of profiling warmup iterations."
+    )
+    def run(
+        script: str,
+        args: tuple,
+        inline: bool,
+        verbose: bool,
+        json_output: bool,
+        min_calls: int,
+        profile_iterations: int,
+    ):
+        """Run a Python script with PyAOT optimization.
         
-        For benchmarking, use --disabled to compare performance.
+        The runner automatically:
+        1. Profiles the script to identify hot callsites
+        2. Generates optimized trampolines (if --inline)
+        3. Runs with optimizations enabled
         
         Example:
-            pyaot run script.py --enabled
-            pyaot run script.py --disabled
+            pyaot run script.py --inline --verbose
+            pyaot run script.py --no-inline  # baseline comparison
+            pyaot run script.py -- arg1 arg2  # pass script arguments
         """
-        import os
+        import json as json_module
+        from pyaot.runner import PyAOTRunner
         
-        if not enabled:
-            os.environ["AOT_DISABLED"] = "1"
+        runner = PyAOTRunner(
+            inline_enabled=inline,
+            profile_iterations=profile_iterations,
+            min_calls=min_calls,
+            verbose=verbose,
+        )
         
-        script_path = Path(script)
-        script_globals = {
-            "__name__": "__main__",
-            "__file__": str(script_path.absolute()),
-        }
+        result = runner.run(script, list(args))
         
-        click.echo(f"Running {script} (AOT {'enabled' if enabled else 'disabled'})...")
-        exec(compile(script_path.read_text(), script, "exec"), script_globals)
+        if json_output:
+            click.echo(json_module.dumps(result.to_dict(), indent=2))
+        else:
+            if result.success:
+                click.echo(f"\n[PyAOT] Completed successfully (exit code: {result.exit_code})")
+                click.echo(f"\nTiming:")
+                click.echo(f"  Observe: {result.observe_time_ms:>10.2f} ms")
+                click.echo(f"  Emit:    {result.emit_time_ms:>10.2f} ms")
+                click.echo(f"  Run:     {result.run_time_ms:>10.2f} ms")
+                click.echo(f"  Total:   {result.total_time_ms:>10.2f} ms")
+                click.echo(f"\nCallsite Statistics:")
+                click.echo(f"  Observed:   {result.callsites_observed}")
+                click.echo(f"  Candidates: {result.candidates_found}")
+                click.echo(f"  Inlined:    {result.callsites_inlined}")
+                if result.native_calls + result.fallback_calls > 0:
+                    click.echo(f"\nDispatch Statistics:")
+                    click.echo(f"  Native calls:   {result.native_calls}")
+                    click.echo(f"  Fallback calls: {result.fallback_calls}")
+                    click.echo(f"  Guard failure:  {result.guard_failure_rate:.2%}")
+            else:
+                click.echo(f"\n[PyAOT] Failed: {result.error}", err=True)
+        
+        sys.exit(result.exit_code)
 
 
 def main():
