@@ -2,19 +2,18 @@
 
 ## Abstract
 
-This document presents the benchmark methodology and performance analysis for PyAOT, a profile-guided ahead-of-time compilation system for Python. The benchmarks quantify the performance characteristics of the Phase 2 shape system for attribute access optimization, as well as the theoretical ceiling for numeric workload optimization. All results are derived from actual benchmark execution on specified hardware.
+This document presents comprehensive benchmark methodology and performance analysis for PyAOT, a profile-guided ahead-of-time compilation system for Python. The benchmarks cover five workload categories comparing Python baseline, NumPy, Numba, and PyAOT native compilation.
 
 ---
 
 ## Table of Contents
 
 1. [Methodology](#1-methodology)
-2. [Phase 2: Attribute Access Benchmarks](#2-phase-2-attribute-access-benchmarks)
-3. [Numeric Loop Benchmarks](#3-numeric-loop-benchmarks)
-4. [Comparative Analysis](#4-comparative-analysis)
+2. [Workload Categories](#2-workload-categories)
+3. [Comparative Analysis](#3-comparative-analysis)
+4. [Phase 3-4 Native Compilation Results](#4-phase-3-4-native-compilation-results)
 5. [Reproducibility](#5-reproducibility)
-6. [Interpretation and Caveats](#6-interpretation-and-caveats)
-7. [References](#7-references)
+6. [References](#6-references)
 
 ---
 
@@ -22,304 +21,186 @@ This document presents the benchmark methodology and performance analysis for Py
 
 ### 1.1 Experimental Setup
 
-All benchmarks were executed on the following system:
-
 | Component | Specification |
 |-----------|---------------|
 | **CPU** | AMD Ryzen 7 9700X 8-Core Processor |
-| **OS** | Linux (WSL2) Kernel 6.6.87.2-microsoft-standard-WSL2 |
+| **OS** | Linux (WSL2) |
 | **Python** | 3.13.3 |
-| **Architecture** | x86_64 |
+| **NumPy** | Latest |
+| **Numba** | 0.63.1 |
+| **llvmlite** | 0.45.0 |
 
 ### 1.2 Measurement Protocol
 
-The benchmark harness implements the following protocol to ensure statistical rigor:
-
-1. **Warmup Phase**: Execute 5 warmup iterations to populate CPU caches and trigger any lazy initialization
-2. **Measurement Phase**: Execute 20 timed iterations using `time.perf_counter_ns()` for nanosecond precision
-3. **Statistical Aggregation**: Report mean and standard deviation
-4. **Timing Precision**: All times converted to milliseconds with 3 decimal places
-
-```python
-def benchmark_function(func, args, warmup=5, iterations=20):
-    for _ in range(warmup):
-        func(*args)
-    
-    times = []
-    for _ in range(iterations):
-        start = time.perf_counter_ns()
-        func(*args)
-        elapsed = (time.perf_counter_ns() - start) / 1_000_000
-        times.append(elapsed)
-    
-    return (statistics.mean(times), statistics.stdev(times), min(times), max(times))
-```
+- **Warmup**: 5 iterations
+- **Measurement**: 20 timed iterations
+- **Timing**: `time.perf_counter_ns()` for nanosecond precision
+- **Metrics**: Mean, standard deviation, min, max, ops/sec
 
 ---
 
-## 2. Phase 2: Attribute Access Benchmarks
+## 2. Workload Categories
 
-### 2.1 Benchmark Description
+### 2.1 Numeric Workloads
 
-Phase 2 introduces side-table shape tracking for optimizing object attribute access. The following methods are compared:
+Array sum benchmark comparing Python, NumPy, and Numba:
 
-| Method | Description |
-|--------|-------------|
-| **Baseline (p.x)** | Standard Python attribute access |
-| **getattr()** | Explicit `getattr(p, 'x')` calls |
-| **__dict__[]** | Direct dictionary access `p.__dict__['x']` |
-| **PyAOT Guarded** | Full Python wrapper with shape guards and fallback |
-| **PyAOT C Direct** | C extension called directly from Python |
+| Array Size | Python (ms) | NumPy (ms) | Numba (ms) | NumPy Speedup | Numba Speedup |
+|------------|-------------|------------|------------|---------------|---------------|
+| 10,000 | 0.104 | 0.002 | 0.004 | **44.6×** | **26.2×** |
+| 100,000 | 1.002 | 0.013 | 0.039 | **79.8×** | **25.4×** |
+| 1,000,000 | 10.210 | 0.114 | 0.413 | **89.8×** | **24.7×** |
 
-### 2.2 Test Workload
+**Key insight**: NumPy provides best numeric performance (hand-tuned SIMD). Numba provides ~25× without code changes.
 
-```python
-class Point:
-    def __init__(self, x: float, y: float):
-        self.x = x
-        self.y = y
+### 2.2 String Workloads
 
-def sum_points(points: List[Point]) -> float:
-    total = 0.0
-    for p in points:
-        total += p.x + p.y  # 2 attribute accesses per iteration
-    return total
-```
+| Workload | Size | Time (ms) | Throughput |
+|----------|------|-----------|------------|
+| CSV Parsing | 10,000 rows | 1.764 | 5.7M rows/sec |
+| Word Count | 100,000 words | 31.0 | 3.2M words/sec |
 
-### 2.3 Results
+**Key insight**: String processing is typically CPU-bound but Python's built-in string operations are already well-optimized in C.
 
-#### Time vs Object Count
+### 2.3 Object Workloads
 
-| Size | Baseline | getattr() | __dict__[] | PyAOT Guarded | PyAOT C Direct |
-|------|----------|-----------|------------|---------------|----------------|
-| 1,000 | 0.016 ms | 0.031 ms | 0.030 ms | 0.550 ms | 0.081 ms |
-| 5,000 | 0.083 ms | 0.157 ms | 0.156 ms | 2.588 ms | 0.358 ms |
-| 10,000 | 0.157 ms | 0.301 ms | 0.283 ms | 5.126 ms | 0.730 ms |
-| 50,000 | 0.781 ms | 1.513 ms | 1.430 ms | 25.250 ms | 3.625 ms |
-| 100,000 | 1.566 ms | 2.970 ms | 2.786 ms | 50.988 ms | 7.618 ms |
+| Workload | Objects | Time (ms) | Ops/sec |
+|----------|---------|-----------|---------|
+| Attribute access (sum) | 1,000 | 0.015 | 66M |
+| Attribute access (sum) | 10,000 | 0.153 | 65M |
+| Method calls (filter) | 1,000 | 0.073 | 14M |
+| Method calls (filter) | 10,000 | 0.705 | 14M |
 
-#### Performance Visualization
+**Key insight**: CPython 3.11+ inline caching makes `p.x` access highly optimized (~15ns per access). Attribute access optimization provides limited gains over baseline.
 
-![Benchmark Time Comparison](benchmarks/benchmark_time.png)
+### 2.4 I/O Workloads
 
-![Speedup Relative to Baseline](benchmarks/benchmark_speedup.png)
+| Workload | Size | Serialize (ms) | Deserialize (ms) | Throughput |
+|----------|------|----------------|------------------|------------|
+| JSON | 1,000 objects | 0.243 | 0.269 | 3.7-4.1M obj/sec |
+| JSON | 10,000 objects | 2.420 | 2.792 | 3.6-4.1M obj/sec |
+| File Write | 10,000 lines | 0.557 | - | 18M lines/sec |
+| File Read | 10,000 lines | - | 0.262 | 38M lines/sec |
 
-![Per-Access Overhead](benchmarks/benchmark_overhead.png)
+**Key insight**: I/O workloads are bound by serialization/OS overhead, not Python interpretation.
 
-### 2.4 Analysis
+### 2.5 Mixed Workloads
 
-The benchmark results reveal important architectural insights:
+| Workload | Size | Python (ms) | Numba (ms) | Speedup |
+|----------|------|-------------|------------|---------|
+| ETL Pipeline | 10,000 rows | 3.754 | - | baseline |
+| Monte Carlo Pi | 100,000 iter | 6.184 | 0.908 | **6.8×** |
+| Monte Carlo Pi | 1,000,000 iter | 61.686 | 9.012 | **6.8×** |
 
-1. **CPython 3.11+ Optimization**: Modern CPython includes per-opcode inline caching that makes `p.x` access highly optimized (~15-16 ns per access). This represents a challenging baseline to beat.
-
-2. **Python Wrapper Overhead**: The `PyAOT Guarded` method incurs significant overhead from Python function calls and tracker lookups. This is expected—the guards are designed to be baked into generated native code in future phases.
-
-3. **C Extension Performance**: The `PyAOT C Direct` path shows ~5× slower than baseline, but this includes Python-to-C call overhead for every access. When integrated into generated native code, this overhead is eliminated.
-
-4. **Correct Fallback**: All PyAOT methods produce identical results to baseline, confirming semantic preservation.
-
-### 2.5 Phase 2 Value Proposition
-
-The Phase 2 shape system provides value through:
-
-| Benefit | Description |
-|---------|-------------|
-| **Shape Tracking** | Identifies types with stable attribute layouts |
-| **Stability Detection** | 95% threshold determines if type is shape-stable |
-| **C Extension API** | Low-overhead attribute access for generated code |
-| **Safe Fallback** | Guard failures silently fall back to `getattr()` |
-
-The full speedup potential (2.5-4×) is realized when shape guards are baked directly into generated native code, eliminating Python call overhead entirely.
+**Key insight**: Numba excels at compute-bound mixed workloads like Monte Carlo simulation.
 
 ---
 
-## 3. Numeric Loop Benchmarks
+## 3. Comparative Analysis
 
-### 3.1 Theoretical Ceiling Analysis
+### 3.1 Optimization Approach Comparison
 
-The following results quantify the gap between pure Python interpretation and optimized native code (NumPy). This gap represents the maximum speedup achievable by any Python optimizer.
+| System | Approach | Best Use Case | Speedup Range | Effort |
+|--------|----------|---------------|---------------|--------|
+| **NumPy** | Vectorized C | Array operations | 45-90× | Use arrays |
+| **Numba** | LLVM JIT | Numeric loops | 7-27× | @jit decorator |
+| **PyAOT** | Profile AOT | Hot numeric paths | 14-28× | No changes |
+| **Cython** | Static AOT | Entire modules | 10-100× | .pyx files |
+| **CPython JIT** | Copy-patch | All bytecode | 0-10% | Built-in |
 
-#### Sum Array Performance
-
-| Array Size | Python (ms) | NumPy (ms) | Speedup |
-|------------|-------------|------------|---------|
-| 1,000 | 0.012 | 0.002 | **7.2×** |
-| 10,000 | 0.120 | 0.002 | **54.1×** |
-| 100,000 | 0.872 | 0.014 | **64.4×** |
-| 1,000,000 | 8.696 | 0.111 | **78.2×** |
-
-#### Dot Product Performance
-
-| Array Size | Python (ms) | NumPy (ms) | Speedup |
-|------------|-------------|------------|---------|
-| 1,000 | 0.022 | 0.001 | **41.8×** |
-| 10,000 | 0.168 | 0.001 | **184.4×** |
-| 100,000 | 1.664 | 0.002 | **705.9×** |
-
-### 3.2 Analysis
-
-The results demonstrate:
-
-1. **Interpreter Overhead Dominance**: Python's bytecode interpretation adds significant overhead for tight numeric loops. Each Python `+` operation involves type dispatch, object allocation, and reference counting.
-
-2. **Super-linear Speedup**: The NumPy speedup ratio *increases* with array size (7× at 1K to 78× at 1M for sum). Fixed interpreter overhead amortizes over more elements.
-
-3. **Dot Product Amplification**: The dot product shows higher speedups (up to 706×) because each iteration involves two Python operations, doubling interpreter overhead.
-
-### 3.3 Phase 3-4: PyAOT Native Compilation Results
-
-PyAOT compiles numeric loops to native machine code via LLVM:
-
-| Array Size | Python (ms) | NumPy (ms) | PyAOT Native (ms) | PyAOT Speedup |
-|------------|-------------|------------|-------------------|---------------|
-| 1,000 | 0.010 | 0.001 | 0.001 | **14.0×** |
-| 10,000 | 0.099 | 0.003 | 0.004 | **23.6×** |
-| 100,000 | 1.066 | 0.012 | 0.039 | **27.6×** |
-| 1,000,000 | 10.152 | 0.198 | 0.433 | **23.4×** |
-
-**Key findings:**
-- **14-28× speedup** vs pure Python loops achieved via LLVM compilation
-- NumPy remains faster (51-86×) due to hand-optimized SIMD implementations
-- PyAOT provides significant speedup without requiring code changes
-
----
-
-## 4. Comparative Analysis
-
-### 4.1 Optimization Approach Comparison
-
-| System | Optimization Approach | Expected Speedup | Integration Effort |
-|--------|----------------------|------------------|-------------------|
-| **PyAOT** | Profile-guided AOT, LLVM codegen | 2-50× | No code changes |
-| **Numba** | Decorator-based JIT, LLVM codegen | 10-100× | Add decorators |
-| **PyPy** | Tracing JIT, meta-tracing | 5-20× | Use PyPy interpreter |
-| **Cython** | Static AOT, C compilation | 10-100× | Write .pyx files |
-| **CPython 3.13 JIT** | Copy-and-patch | 0-10% | None (built-in) |
-
-### 4.2 PyAOT Phase Roadmap
+### 3.2 When to Use Each Tool
 
 ```mermaid
-graph LR
-    P1[Phase 1: Profiling] --> P2[Phase 2: Shape System]
-    P2 --> P3[Phase 3: Code Generation]
-    P3 --> P4[Phase 4: Integration]
+graph TD
+    A[Optimization Need] --> B{Workload Type?}
     
-    style P1 fill:#2ecc71
-    style P2 fill:#2ecc71
-    style P3 fill:#2ecc71
-    style P4 fill:#2ecc71
+    B --> C[Numeric Arrays]
+    B --> D[Numeric Loops]
+    B --> E[String/IO]
+    B --> F[Object Access]
+    
+    C --> C1[NumPy - Best choice]
+    D --> D1{Code changes OK?}
+    D1 --> |Yes| D2[Numba - 7-27× speedup]
+    D1 --> |No| D3[PyAOT - 14-28× speedup]
+    E --> E1[Python baseline - already optimized]
+    F --> F1[Python baseline - CPython inline caching]
 ```
 
-| Phase | Status | Performance Impact |
-|-------|--------|-------------------|
-| Phase 1: Profiling | ✓ Complete | Enables hot path detection |
-| Phase 2: Shape System | ✓ Complete | Enables attribute access optimization |
-| Phase 3: Code Generation | ✓ Complete | Native numeric loops (14-28× speedup) |
-| Phase 4: Integration | ✓ Complete | @optimize decorator, pipeline API |
+### 3.3 Phase Completion Status
+
+| Phase | Status | Speedup Achieved |
+|-------|--------|------------------|
+| Phase 1: Profiling | ✓ Complete | Baseline measurement |
+| Phase 2: Shape System | ✓ Complete | Infrastructure ready |
+| Phase 3: Code Generation | ✓ Complete | 14-28× numeric loops |
+| Phase 4: Integration | ✓ Complete | @optimize API |
+
+---
+
+## 4. Phase 3-4 Native Compilation Results
+
+PyAOT compiles numeric loops directly to native code via LLVM:
+
+| Array Size | Python (ms) | PyAOT Native (ms) | Speedup |
+|------------|-------------|-------------------|---------|
+| 1,000 | 0.010 | 0.001 | **14.0×** |
+| 10,000 | 0.099 | 0.004 | **23.6×** |
+| 100,000 | 1.066 | 0.039 | **27.6×** |
+| 1,000,000 | 10.152 | 0.433 | **23.4×** |
+
+### Why Attribute Access Benchmarks Were Slower
+
+| Issue | Impact |
+|-------|--------|
+| CPython 3.11+ inline caching | Baseline `p.x` is ~15ns |
+| Python function call overhead | ~50-100ns per call |
+| `__dict__` lookup | ~30ns (slower than inline cache) |
+
+**Conclusion**: The shape system provides infrastructure for future method inlining and devirtualization. Numeric loop compilation is where PyAOT delivers immediate value.
 
 ---
 
 ## 5. Reproducibility
 
-### 5.1 Prerequisites
+### 5.1 Running Benchmarks
 
 ```bash
 # Clone repository
 git clone https://github.com/ankitkpandey1/pyaot.git
 cd pyaot
 
-# Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
 # Install dependencies
 pip install -e .[dev]
-pip install matplotlib
-```
+pip install numpy numba matplotlib
 
-### 5.2 Running Benchmarks
+# Run comprehensive benchmark
+python benchmarks/bench_comprehensive.py
 
-```bash
-# Activate virtual environment
-source .venv/bin/activate
+# Run native loops benchmark
+python benchmarks/bench_native_loops.py
 
-# Run attribute access benchmarks (Phase 2)
-python benchmarks/bench_numeric_loop.py
-
-# Run shape-specific benchmarks
+# Run shape benchmark
 python benchmarks/bench_shapes.py
 ```
 
-### 5.3 Generated Artifacts
-
-The benchmarks generate the following files in the `benchmarks/` directory:
+### 5.2 Benchmark Files
 
 | File | Description |
 |------|-------------|
-| `benchmark_time.png` | Time vs object count bar chart |
-| `benchmark_speedup.png` | Speedup relative to baseline |
-| `benchmark_overhead.png` | Per-access overhead in nanoseconds |
-
-### 5.4 System Information Commands
-
-```bash
-python --version
-uname -a
-cat /proc/cpuinfo | grep "model name" | head -1
-```
+| `bench_comprehensive.py` | All 5 workload categories with NumPy/Numba comparison |
+| `bench_native_loops.py` | LLVM native compilation speedup |
+| `bench_shapes.py` | Shape system performance |
 
 ---
 
-## 6. Interpretation and Caveats
+## 6. References
 
-### 6.1 Microbenchmark Limitations
-
-The benchmarks presented are **microbenchmarks** that isolate specific computation patterns. Real-world applications involve:
-
-- Mixed compute and I/O operations
-- Complex control flow
-- Diverse type patterns
-- Memory pressure from large working sets
-
-Microbenchmark speedups may not fully translate to application-level improvements.
-
-### 6.2 Phase 2 Performance Context
-
-The Phase 2 shape system shows overhead when called through Python wrappers. This is expected and understood:
-
-- Python function call overhead dominates for fine-grained operations
-- Guard checks add constant overhead per access
-- The C extension is designed for integration with generated native code
-
-The Phase 2 infrastructure becomes valuable in Phase 3 when guards are compiled directly into native code.
-
-### 6.3 Variability Sources
-
-Benchmark results may vary due to:
-
-- **CPU Frequency Scaling**: Turbo boost and power management
-- **Background Processes**: System load during measurement
-- **Memory State**: Cache residency from prior operations
-- **Python Version**: Interpreter optimizations differ across versions
-
-The warmup phase and multiple iterations mitigate—but do not eliminate—these effects.
+1. **NumPy**: Harris et al., "Array programming with NumPy," Nature 585, 357–362 (2020)
+2. **Numba**: Lam et al., "Numba: A LLVM-based Python JIT Compiler," LLVM-HPC2015
+3. **CPython 3.13 JIT**: [PEP 744 – JIT Compilation](https://peps.python.org/pep-0744/)
+4. **Inline Caching**: Deutsch & Schiffman, "Efficient Implementation of the Smalltalk-80 System," POPL 1984
 
 ---
 
-## 7. References
-
-1. **NumPy Performance**: Harris et al., "Array programming with NumPy," Nature 585, 357–362 (2020). [DOI: 10.1038/s41586-020-2649-2](https://doi.org/10.1038/s41586-020-2649-2)
-
-2. **Numba**: Lam et al., "Numba: A LLVM-based Python JIT Compiler," Proceedings of LLVM-HPC2015.
-
-3. **PyPy Performance**: Bolz et al., "Tracing the Meta-Level: PyPy's Tracing JIT Compiler," ICOOOLPS 2009.
-
-4. **CPython 3.13 JIT**: [PEP 744 – JIT Compilation](https://peps.python.org/pep-0744/)
-
-5. **Hidden Classes and Shapes**: Chambers et al., "An Efficient Implementation of SELF," OOPSLA 1989.
-
-6. **Type Stability**: Bezanson et al., "Julia: Dynamism and Performance Reconciled by Design," OOPSLA 2018.
-
----
-
-**Benchmark executed**: 2025-12-29T13:43:00Z
+**Benchmark executed**: 2025-12-29T14:05:00Z
