@@ -1,206 +1,155 @@
-# PyAOT Benchmark Methodology and Results
+# PyAOT Benchmark Results
 
-## Abstract
-
-This document presents comprehensive benchmark methodology and performance analysis for PyAOT, a profile-guided ahead-of-time compilation system for Python. The benchmarks cover five workload categories comparing Python baseline, NumPy, Numba, and PyAOT native compilation.
-
----
-
-## Table of Contents
-
-1. [Methodology](#1-methodology)
-2. [Workload Categories](#2-workload-categories)
-3. [Comparative Analysis](#3-comparative-analysis)
-4. [Phase 3-4 Native Compilation Results](#4-phase-3-4-native-compilation-results)
-5. [Reproducibility](#5-reproducibility)
-6. [References](#6-references)
-
----
-
-## 1. Methodology
-
-### 1.1 Experimental Setup
+## System Information
 
 | Component | Specification |
 |-----------|---------------|
 | **CPU** | AMD Ryzen 7 9700X 8-Core Processor |
-| **OS** | Linux (WSL2) |
+| **OS** | Linux 6.6.87.2 (WSL2) |
 | **Python** | 3.13.3 |
-| **NumPy** | Latest |
+| **NumPy** | 2.2.2 |
 | **Numba** | 0.63.1 |
 | **llvmlite** | 0.45.0 |
 
-### 1.2 Measurement Protocol
+## Measurement Protocol
 
-- **Warmup**: 5 iterations
-- **Measurement**: 20 timed iterations
-- **Timing**: `time.perf_counter_ns()` for nanosecond precision
-- **Metrics**: Mean, standard deviation, min, max, ops/sec
+- **Warmup**: 5 iterations (not counted)
+- **Measurement**: 20 iterations
+- **Timing**: `time.perf_counter_ns()` nanosecond precision
+- **Process Isolation**: Fresh process per configuration
 
 ---
 
-## 2. Workload Categories
+## 1. Native Numeric Loop Compilation (LLVM)
 
-### 2.1 Numeric Workloads
+PyAOT compiles numeric loops to native machine code via LLVM.
 
-Array sum benchmark comparing Python, NumPy, and Numba:
+### Array Sum
 
-| Array Size | Python (ms) | NumPy (ms) | Numba (ms) | NumPy Speedup | Numba Speedup |
-|------------|-------------|------------|------------|---------------|---------------|
-| 10,000 | 0.104 | 0.002 | 0.004 | **44.6×** | **26.2×** |
-| 100,000 | 1.002 | 0.013 | 0.039 | **79.8×** | **25.4×** |
-| 1,000,000 | 10.210 | 0.114 | 0.413 | **89.8×** | **24.7×** |
+| Array Size | Python (ms) | NumPy (ms) | PyAOT LLVM (ms) | vs Python | vs NumPy |
+|------------|-------------|------------|-----------------|-----------|----------|
+| 1,000 | 0.010 | 0.001 | 0.001 | 14.000× | 1.000× |
+| 10,000 | 0.099 | 0.003 | 0.004 | 23.636× | 0.750× |
+| 100,000 | 1.066 | 0.012 | 0.039 | 27.333× | 0.308× |
+| 1,000,000 | 10.152 | 0.198 | 0.433 | 23.446× | 0.457× |
 
-**Key insight**: NumPy provides best numeric performance (hand-tuned SIMD). Numba provides ~25× without code changes.
+---
 
-### 2.2 String Workloads
+## 2. Call-Boundary Elimination
 
-| Workload | Size | Time (ms) | Throughput |
-|----------|------|-----------|------------|
-| CSV Parsing | 10,000 rows | 1.764 | 5.7M rows/sec |
-| Word Count | 100,000 words | 31.0 | 3.2M words/sec |
+Inlining eliminates Python function call overhead (~50-200ns per call).
 
-**Key insight**: String processing is typically CPU-bound but Python's built-in string operations are already well-optimized in C.
+### Call-Heavy Inner Loop
 
-### 2.3 Object Workloads
+```python
+def inner(x):
+    return x * 1.000001 + 0.5
 
-| Workload | Objects | Time (ms) | Ops/sec |
-|----------|---------|-----------|---------|
-| Attribute access (sum) | 1,000 | 0.015 | 66M |
-| Attribute access (sum) | 10,000 | 0.153 | 65M |
-| Method calls (filter) | 1,000 | 0.073 | 14M |
-| Method calls (filter) | 10,000 | 0.705 | 14M |
+def loop(data):
+    s = 0.0
+    for x in data:
+        s += inner(x)  # <-- call site
+    return s
+```
 
-**Key insight**: CPython 3.11+ inline caching makes `p.x` access highly optimized (~15ns per access). Attribute access optimization provides limited gains over baseline.
+| Size | Python with calls (ms) | Inlined (ms) | Speedup |
+|------|------------------------|--------------|---------|
+| 10,000 | 0.222 | 0.179 | 1.240× |
+| 100,000 | 2.146 | 1.455 | 1.475× |
+| 1,000,000 | 24.695 | 16.055 | 1.538× |
 
-### 2.4 I/O Workloads
+### Call Chain
 
-| Workload | Size | Serialize (ms) | Deserialize (ms) | Throughput |
-|----------|------|----------------|------------------|------------|
-| JSON | 1,000 objects | 0.243 | 0.269 | 3.7-4.1M obj/sec |
-| JSON | 10,000 objects | 2.420 | 2.792 | 3.6-4.1M obj/sec |
-| File Write | 10,000 lines | 0.557 | - | 18M lines/sec |
-| File Read | 10,000 lines | - | 0.262 | 38M lines/sec |
+```python
+def helper(a, b):
+    return a * b + (a - b)
 
-**Key insight**: I/O workloads are bound by serialization/OS overhead, not Python interpretation.
+def caller(data_a, data_b):
+    s = 0.0
+    for a, b in zip(data_a, data_b):
+        s += helper(a, b)  # <-- call site
+    return s
+```
 
-### 2.5 Mixed Workloads
+| Size | Python with calls (ms) | Inlined (ms) | Speedup |
+|------|------------------------|--------------|---------|
+| 10,000 | 0.379 | 0.246 | 1.541× |
+| 100,000 | 3.819 | 2.426 | 1.574× |
 
-| Workload | Size | Python (ms) | Numba (ms) | Speedup |
-|----------|------|-------------|------------|---------|
-| ETL Pipeline | 10,000 rows | 3.754 | - | baseline |
-| Monte Carlo Pi | 100,000 iter | 6.184 | 0.908 | **6.8×** |
-| Monte Carlo Pi | 1,000,000 iter | 61.686 | 9.012 | **6.8×** |
+### Monte Carlo Pi
 
-**Key insight**: Numba excels at compute-bound mixed workloads like Monte Carlo simulation.
+```python
+def sample():
+    x, y = random(), random()
+    return 1 if x*x + y*y <= 1 else 0
+
+def monte_carlo(n):
+    return 4.0 * sum(sample() for _ in range(n)) / n
+```
+
+| Samples | Python with calls (ms) | Inlined (ms) | Speedup |
+|---------|------------------------|--------------|---------|
+| 100,000 | 7.158 | 6.350 | 1.127× |
+| 1,000,000 | 71.694 | 63.041 | 1.137× |
+
+### ETL Transform Pipeline
+
+```python
+def transform(row):
+    return row[0] * 1.1 + row[1] * 0.9
+
+def etl(rows):
+    return [transform(r) for r in rows]
+```
+
+| Rows | Python with calls (ms) | Inlined (ms) | Speedup |
+|------|------------------------|--------------|---------|
+| 100,000 | 3.226 | 2.493 | 1.294× |
+| 1,000,000 | 37.013 | 27.105 | 1.366× |
 
 ---
 
 ## 3. Comparative Analysis
 
-### 3.1 Optimization Approach Comparison
+### NumPy vs Numba vs PyAOT (Array Sum 1M elements)
 
-| System | Approach | Best Use Case | Speedup Range | Effort |
-|--------|----------|---------------|---------------|--------|
-| **NumPy** | Vectorized C | Array operations | 45-90× | Use arrays |
-| **Numba** | LLVM JIT | Numeric loops | 7-27× | @jit decorator |
-| **PyAOT** | Profile AOT | Hot numeric paths | 14-28× | No changes |
-| **Cython** | Static AOT | Entire modules | 10-100× | .pyx files |
-| **CPython JIT** | Copy-patch | All bytecode | 0-10% | Built-in |
+| Implementation | Time (ms) | vs Python |
+|----------------|-----------|-----------|
+| Python loop | 10.210 | 1.000× |
+| Numba JIT | 0.413 | 24.722× |
+| NumPy | 0.114 | 89.561× |
 
-### 3.2 When to Use Each Tool
+### Workload Coverage
 
-```mermaid
-graph TD
-    A[Optimization Need] --> B{Workload Type?}
-    
-    B --> C[Numeric Arrays]
-    B --> D[Numeric Loops]
-    B --> E[String/IO]
-    B --> F[Object Access]
-    
-    C --> C1[NumPy - Best choice]
-    D --> D1{Code changes OK?}
-    D1 --> |Yes| D2[Numba - 7-27× speedup]
-    D1 --> |No| D3[PyAOT - 14-28× speedup]
-    E --> E1[Python baseline - already optimized]
-    F --> F1[Python baseline - CPython inline caching]
-```
-
-### 3.3 Phase Completion Status
-
-| Phase | Status | Speedup Achieved |
-|-------|--------|------------------|
-| Phase 1: Profiling | ✓ Complete | Baseline measurement |
-| Phase 2: Shape System | ✓ Complete | Infrastructure ready |
-| Phase 3: Code Generation | ✓ Complete | 14-28× numeric loops |
-| Phase 4: Integration | ✓ Complete | @optimize API |
+| Workload Type | Best Tool | PyAOT Benefit |
+|---------------|-----------|---------------|
+| Numeric arrays | NumPy | Alternative without NumPy dependency |
+| Numeric loops | Numba/PyAOT | 14-28× via LLVM compilation |
+| Call-heavy code | PyAOT inline | 1.1-1.6× via call elimination |
+| String/IO | Python | Already optimized |
+| Object access | Python | CPython inline caching is fast |
 
 ---
 
-## 4. Phase 3-4 Native Compilation Results
-
-PyAOT compiles numeric loops directly to native code via LLVM:
-
-| Array Size | Python (ms) | PyAOT Native (ms) | Speedup |
-|------------|-------------|-------------------|---------|
-| 1,000 | 0.010 | 0.001 | **14.0×** |
-| 10,000 | 0.099 | 0.004 | **23.6×** |
-| 100,000 | 1.066 | 0.039 | **27.6×** |
-| 1,000,000 | 10.152 | 0.433 | **23.4×** |
-
-### Why Attribute Access Benchmarks Were Slower
-
-| Issue | Impact |
-|-------|--------|
-| CPython 3.11+ inline caching | Baseline `p.x` is ~15ns |
-| Python function call overhead | ~50-100ns per call |
-| `__dict__` lookup | ~30ns (slower than inline cache) |
-
-**Conclusion**: The shape system provides infrastructure for future method inlining and devirtualization. Numeric loop compilation is where PyAOT delivers immediate value.
-
----
-
-## 5. Reproducibility
-
-### 5.1 Running Benchmarks
+## 4. Reproducibility
 
 ```bash
-# Clone repository
+# Clone and install
 git clone https://github.com/ankitkpandey1/pyaot.git
 cd pyaot
-
-# Install dependencies
 pip install -e .[dev]
-pip install numpy numba matplotlib
+pip install numpy numba
 
-# Run comprehensive benchmark
-python benchmarks/bench_comprehensive.py
+# Run benchmarks
+python benchmarks/bench_native_loops.py      # LLVM compilation
+python benchmarks/bench_phase5.py            # Call elimination
+python benchmarks/bench_comprehensive.py     # All workloads
 
-# Run native loops benchmark
-python benchmarks/bench_native_loops.py
-
-# Run shape benchmark
-python benchmarks/bench_shapes.py
+# Results saved to
+# benchmarks/results/phase5_results.csv
+# benchmarks/results/phase5_results.json
 ```
 
-### 5.2 Benchmark Files
-
-| File | Description |
-|------|-------------|
-| `bench_comprehensive.py` | All 5 workload categories with NumPy/Numba comparison |
-| `bench_native_loops.py` | LLVM native compilation speedup |
-| `bench_shapes.py` | Shape system performance |
-
 ---
 
-## 6. References
-
-1. **NumPy**: Harris et al., "Array programming with NumPy," Nature 585, 357–362 (2020)
-2. **Numba**: Lam et al., "Numba: A LLVM-based Python JIT Compiler," LLVM-HPC2015
-3. **CPython 3.13 JIT**: [PEP 744 – JIT Compilation](https://peps.python.org/pep-0744/)
-4. **Inline Caching**: Deutsch & Schiffman, "Efficient Implementation of the Smalltalk-80 System," POPL 1984
-
----
-
-**Benchmark executed**: 2025-12-29T14:05:00Z
+**Benchmark Date**: 2025-12-29
