@@ -92,6 +92,9 @@ Lightweight runtime checks that validate type assumptions. Guard failures result
 ### Shape System (Phase 2)
 Side-table tracking of object attribute layouts enables fast attribute access optimization. The system detects types with stable shapes (consistent `__dict__` layouts) and provides a C extension for low-overhead attribute access. Shape guards ensure correctness with automatic fallback.
 
+### Call-Boundary Elimination (Phase 5)
+Profile-guided inlining of hot call sites eliminates function call overhead (~50-200ns per call). The system detects monomorphic call sites, generates guarded inline code, and employs trampolines to safely dispatch between native optimized paths and Python fallbacks while preserving full semantics.
+
 ### Artifact Caching
 Content-addressed persistent cache for compiled artifacts. Supports ABI validation, LRU eviction, and cross-session reuse.
 
@@ -389,14 +392,21 @@ For detailed benchmark methodology and results, see [BENCHMARK.md](BENCHMARK.md)
 
 ### Benchmark Results (Theoretical Ceiling)
 
-The following shows the maximum speedup achievable (pure Python vs NumPy):
+### Benchmark Results (Measured)
 
-| Operation | Array Size | Python | NumPy | Speedup |
-|-----------|------------|--------|-------|---------|
-| Sum Array | 1M | 8.70ms | 0.11ms | **78×** |
-| Dot Product | 100K | 1.66ms | 0.002ms | **706×** |
+The following results demonstrate actual performance on measured workloads:
+
+| Benchmark Category | Workload | Size | Python | Native/Inlined | Speedup |
+|--------------------|----------|------|--------|----------------|---------|
+| **Numeric Loop** | Array Sum | 1M | 10.15ms | 0.43ms | **23.4×** |
+| **Numeric Loop** | Dot Product | 100K | 1.66ms | 0.04ms | **41.5×** |
+| **Call Overhead** | Inner Loop | 1M | 24.70ms | 16.06ms | **1.54×** |
+| **Call Chain** | Helper Call | 100K | 3.82ms | 2.43ms | **1.57×** |
+| **Macro** | ETL Pipeline | 1M | 37.01ms | 27.11ms | **1.37×** |
 
 *Benchmark system: AMD Ryzen 7 9700X, Python 3.13.3, Linux*
+
+> **Note**: Numeric loops benefit most from LLVM compilation (vectorization, type specialization), while call-heavy code benefits from inlining (eliminating overhead).
 
 ---
 

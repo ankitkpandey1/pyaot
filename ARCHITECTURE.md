@@ -16,7 +16,8 @@ PyAOT implements a profile-guided ahead-of-time (AOT) compilation system for Pyt
    - [Type System](#33-type-system)
    - [Shape System](#34-shape-system)
    - [Compiler Subsystem](#35-compiler-subsystem)
-   - [Cache Subsystem](#36-cache-subsystem)
+   - [Inline Subsystem](#36-inline-subsystem)
+   - [Cache Subsystem](#37-cache-subsystem)
 4. [Data Flow](#4-data-flow)
 5. [Design Decisions](#5-design-decisions)
 6. [Comparison with Related Systems](#6-comparison-with-related-systems)
@@ -425,7 +426,37 @@ The `LLVMCodegen` class uses `llvmlite` to generate native code:
 4. JIT compile to native function pointer
 5. Create ctypes wrapper for Python interop
 
-### 3.6 Cache Subsystem
+### 3.6 Inline Subsystem
+
+**Location**: `pyaot/inline/`
+
+The inline subsystem implements profile-guided call-boundary elimination. It detects hot monomorphic call sites and replaces Python function calls with guarded native code execution.
+
+#### Eligibility Analysis
+
+The `EligibilityAnalyzer` enforces strict criteria to ensure safety and performance:
+1. **Hot**: ≥1000 observed calls
+2. **Monomorphic**: ≥99.5% calls to same callee
+3. **Leaf**: Callee makes no Python calls (except whitelisted math/builtins)
+4. **Simple**: No `*args`, `**kwargs`, generators, or coroutines
+
+#### Trampoline Mechanism
+
+To safely inline while preserving Python semantics, PyAOT generates a **trampoline**:
+
+```python
+def trampoline(*args):
+    # Fast Path: Check Guards
+    if guards.check_all(args):
+        return native_optimized_impl(*args)
+    
+    # Fallback: Original Python Call
+    return python_original(*args)
+```
+
+This ensures that if assumptions are violated (e.g., passing a string to a numeric function), execution transparently falls back to the original Python implementation.
+
+### 3.7 Cache Subsystem
 
 **Location**: `pyaot/cache/`
 
