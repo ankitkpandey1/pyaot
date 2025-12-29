@@ -51,6 +51,9 @@ class GuardedArtifact:
     native_calls: int = 0
     fallback_calls: int = 0
     
+    # Keep LLVM execution engine alive (prevents GC of native code)
+    _engine: Any = None
+    
     def __call__(self, *args) -> Any:
         """
         Execute with guard check.
@@ -113,12 +116,17 @@ class InlineCodegen(LLVMCodegen):
         telemetry = get_telemetry()
         telemetry.record_emit_time(emit_time)
         
+        # CRITICAL: Pass _engine to keep LLVM execution engine alive
+        # If the engine is garbage collected, the native code becomes invalid
+        engine = getattr(artifact, '_engine', None)
+        
         return GuardedArtifact(
             native_ptr=artifact.function_ptr,
             native_callable=artifact.callable,
             guards=guards,
             fallback=fallback,
             callsite_id=callsite_id,
+            _engine=engine,
         )
     
     def _compile_instruction(self, inst: IRInstruction) -> None:

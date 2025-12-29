@@ -166,6 +166,9 @@ class AdaptiveCompiler:
         
         # Functions pending recompilation
         self._pending_recompile: Set[int] = set()
+        
+        # Keep LLVM execution engines alive (prevent GC of native code)
+        self._keep_alive_refs: List[Any] = []
     
     def compile(
         self,
@@ -278,24 +281,38 @@ class AdaptiveCompiler:
         
         Returns the native callable, or None if compilation fails.
         
-        NOTE: Currently disabled due to IR lowering issues causing segfaults.
-        The Python function with guard checking still provides value by
-        validating types at runtime and enabling future LLVM integration.
-        
-        TODO: Fix IR lowering to produce safe ctypes-callable native code.
+        The native callable is a ctypes function that executes the LLVM-compiled
+        native code. The LLVM execution engine is kept alive by storing a reference
+        in the returned artifact.
         """
-        # Native LLVM compilation is temporarily disabled.
-        # The current IR lowering produces code that causes segfaults when
-        # called via ctypes. This needs investigation:
-        # 1. The IR doesn't properly handle Python object boxing/unboxing
-        # 2. The ctypes wrapper signature doesn't match the native function
-        # 3. The LLVM execution engine may need to stay alive longer
-        #
-        # For now, use Python function with guard checking which still provides:
-        # - Type validation at runtime
-        # - Guard failure tracking for drift detection
-        # - Source hash invalidation for recompilation
-        return None
+        try:
+            from pyaot.compiler.inline_codegen import compile_for_inline
+            from pyaot.compiler.codegen import LLVMLITE_AVAILABLE
+            
+            if not LLVMLITE_AVAILABLE:
+                return None
+            
+            # Create sample args from signature for type inference
+            sample_args = self._create_sample_args(signature)
+            
+            # Compile using inline codegen
+            artifact = compile_for_inline(
+                callee=func,
+                callsite_id=f"adaptive_{id(func)}",
+                sample_args=sample_args,
+            )
+            
+            if artifact and artifact.native_callable:
+                # Store the engine reference to prevent GC
+                # The artifact's _engine is kept alive by the artifact itself
+                self._keep_alive_refs.append(artifact._engine)
+                return artifact.native_callable
+            
+            return None
+            
+        except Exception:
+            # Compilation failed, return None to use Python fallback
+            return None
     
     def _create_sample_args(self, signature: FunctionSignature) -> tuple:
         """Create sample arguments from signature for type inference."""
@@ -391,6 +408,7 @@ class AdaptiveCompiler:
             self._source_hashes.clear()
             self._drift_events.clear()
             self._pending_recompile.clear()
+            self._keep_alive_refs.clear()
 
 
 # Global singleton
