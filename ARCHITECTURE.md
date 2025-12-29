@@ -28,29 +28,29 @@ PyAOT implements a profile-guided ahead-of-time (AOT) compilation system for Pyt
 
 ## 1. System Overview
 
-PyAOT operates in five sequential phases, each with distinct responsibilities:
+PyAOT operates through five sequential stages, each with distinct responsibilities:
 
 ```mermaid
 graph LR
-    subgraph Phase1["Phase 1: Observation"]
+    subgraph Observation["Observation"]
         P1[Profile Collector]
     end
     
-    subgraph Phase2["Phase 2: Selection"]
+    subgraph Selection["Selection"]
         P2[Hotness Scorer]
         P3[Eligibility Checker]
     end
     
-    subgraph Phase3["Phase 3: Compilation"]
+    subgraph Compilation["Compilation"]
         P4[AST Lowerer]
         P5[LLVM Codegen]
     end
     
-    subgraph Phase4["Phase 4: Deployment"]
+    subgraph Deployment["Deployment"]
         P6[Cache Storage]
     end
     
-    subgraph Phase5["Phase 5: Execution"]
+    subgraph Execution["Execution"]
         P7[Guarded Dispatcher]
     end
     
@@ -62,7 +62,7 @@ graph LR
     P6 --> P7
 ```
 
-| Phase | Component | Input | Output |
+| Stage | Component | Input | Output |
 |-------|-----------|-------|--------|
 | Observation | `ProfileCollector` | Python execution | `ProfileData` (call stats, types, shapes) |
 | Selection | `HotnessScorer`, `EligibilityChecker` | `ProfileData` | Ranked candidate list |

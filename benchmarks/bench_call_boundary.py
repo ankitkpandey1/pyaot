@@ -1,5 +1,5 @@
 """
-Phase 5 Benchmark Suite.
+Call-Boundary Elimination Benchmark Suite.
 
 Strict reproducible benchmarks measuring actual call-boundary
 elimination performance with process isolation.
@@ -275,14 +275,14 @@ def create_pyaot_inline_version(original: Callable) -> Callable:
 # =============================================================================
 
 def run_all_benchmarks(output_dir: str = "benchmarks/results") -> List[BenchmarkResult]:
-    """Run all Phase 5 benchmarks."""
+    """Run all call-boundary elimination benchmarks."""
     os.makedirs(output_dir, exist_ok=True)
     
     results = []
     system_info = get_system_info()
     
     print("=" * 80)
-    print("Phase 5: Call-Boundary Elimination Benchmarks")
+    print("Call-Boundary Elimination Benchmarks")
     print("=" * 80)
     print()
     print(f"Python: {sys.version.split()[0]}")
@@ -500,7 +500,7 @@ def run_all_benchmarks(output_dir: str = "benchmarks/results") -> List[Benchmark
     print("=" * 80)
     
     # Save CSV
-    csv_path = os.path.join(output_dir, "phase5_results.csv")
+    csv_path = os.path.join(output_dir, "call_boundary_results.csv")
     with open(csv_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=[
             "benchmark", "configuration", "size", 
@@ -514,7 +514,7 @@ def run_all_benchmarks(output_dir: str = "benchmarks/results") -> List[Benchmark
     print(f"  CSV: {csv_path}")
     
     # Save JSON with raw data
-    json_path = os.path.join(output_dir, "phase5_results.json")
+    json_path = os.path.join(output_dir, "call_boundary_results.json")
     with open(json_path, "w") as f:
         json.dump({
             "system_info": system_info,

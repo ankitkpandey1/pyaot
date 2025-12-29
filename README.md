@@ -89,10 +89,10 @@ AOT compilation via LLVM for eligible functions. Generates platform-native code 
 ### Safe Guards
 Lightweight runtime checks that validate type assumptions. Guard failures result in transparent fallback to Python interpretation—never crashes or incorrect results.
 
-### Shape System (Phase 2)
+### Shape System
 Side-table tracking of object attribute layouts enables fast attribute access optimization. The system detects types with stable shapes (consistent `__dict__` layouts) and provides a C extension for low-overhead attribute access. Shape guards ensure correctness with automatic fallback.
 
-### Call-Boundary Elimination (Phase 5)
+### Call-Boundary Elimination
 Profile-guided inlining of hot call sites eliminates function call overhead (~50-200ns per call). The system detects monomorphic call sites, generates guarded inline code, and employs trampolines to safely dispatch between native optimized paths and Python fallbacks while preserving full semantics.
 
 ### Artifact Caching
@@ -208,17 +208,17 @@ pyaot cache clear
 
 ## How It Works
 
-PyAOT operates in five phases:
+PyAOT operates through five stages:
 
 ```mermaid
 graph LR
-    A[Phase 1: Observation] --> B[Phase 2: Selection]
-    B --> C[Phase 3: Compilation]
-    C --> D[Phase 4: Deployment]
-    D --> E[Phase 5: Execution]
+    A[Observation] --> B[Selection]
+    B --> C[Compilation]
+    C --> D[Deployment]
+    D --> E[Execution]
 ```
 
-### Phase 1: Observation
+### Observation
 
 The profiler collects runtime statistics using `sys.setprofile`:
 
@@ -229,7 +229,7 @@ The profiler collects runtime statistics using `sys.setprofile`:
 
 Sampling (default: 1 in 1000 calls) maintains <5% overhead.
 
-### Phase 2: Selection
+### Selection
 
 Functions are ranked by **hotness score**:
 
@@ -245,7 +245,7 @@ Eligibility requires:
 - `stability_score ≥ 0.95`
 - No disallowed patterns (eval, exec, dynamic imports, etc.)
 
-### Phase 3: Compilation
+### Compilation
 
 Eligible functions are compiled through:
 
@@ -254,7 +254,7 @@ Eligible functions are compiled through:
 3. **Optimization**: Dead code elimination, constant folding
 4. **Code Generation**: IR → LLVM IR → native code
 
-### Phase 4: Deployment
+### Deployment
 
 Compiled artifacts are stored in a content-addressed cache:
 
@@ -267,7 +267,7 @@ Compiled artifacts are stored in a content-addressed cache:
 
 ABI compatibility is validated before loading.
 
-### Phase 5: Execution
+### Execution
 
 The guarded dispatcher routes calls:
 
@@ -291,33 +291,35 @@ For comprehensive architecture documentation, see [ARCHITECTURE.md](ARCHITECTURE
 
 ```
 pyaot/
-├── profiler/           # Runtime profiling (Phase 1)
+├── profiler/           # Runtime profiling
 │   ├── collector.py    # sys.setprofile-based collection
 │   ├── data.py         # ProfileData, FunctionProfile
 │   └── context.py      # Context managers
-├── selector/           # Function selection (Phase 2)
+├── selector/           # Function selection
 │   ├── scorer.py       # Hotness scoring
 │   ├── eligibility.py  # AST analysis
 │   └── ranker.py       # Candidate ranking
-├── types/              # Type system & guards (Phase 3 & 5)
+├── types/              # Type system & guards
 │   ├── inference.py    # Type inference
 │   ├── guards.py       # Runtime guards
 │   └── dispatcher.py   # Guarded dispatch
-├── shapes/             # Shape system (Phase 2)
+├── shapes/             # Shape system
 │   ├── shape.py        # Shape dataclass
 │   ├── registry.py     # Global shape registry
 │   ├── tracker.py      # Type-level stability tracking
 │   ├── fast_attr.py    # Python wrapper for fast access
 │   └── _fast_attr.c    # C extension
-├── compiler/           # AOT compilation (Phase 3)
+├── compiler/           # AOT compilation
 │   ├── ir.py           # Intermediate representation
 │   ├── lowering.py     # AST → IR transformation
 │   ├── codegen.py      # LLVM code generation
 │   └── numpy_support.py# NumPy operation support
-├── cache/              # Artifact management (Phase 4)
+├── cache/              # Artifact management
 │   ├── hasher.py       # Content-addressed hashing
 │   ├── storage.py      # Persistent storage
 │   └── lru.py          # LRU eviction
+├── hints.py            # Type hint extraction (PEP 484)
+├── adaptive.py         # Adaptive compilation controller
 └── cli/                # Command-line interface
     └── main.py         # CLI entry point
 ```
@@ -527,7 +529,7 @@ python benchmarks/bench_full_suite.py
 
 # Individual benchmarks
 python benchmarks/bench_numeric_loop.py     # Numeric operations
-python benchmarks/bench_phase5.py           # Call-boundary elimination
+python benchmarks/bench_call_boundary.py    # Call-boundary elimination
 ```
 
 ### Running Examples
@@ -558,7 +560,7 @@ ruff pyaot/
 
 1. **Python Subset**: Only a subset of Python constructs can be compiled
 2. **NumPy Dependency**: Array operations require NumPy for type/shape information
-3. **Cold Start**: Initial profiling phase adds overhead before benefits
+3. **Cold Start**: Initial profiling adds overhead before benefits
 4. **Single Variant**: Each compiled artifact handles one dominant type signature
 5. **CPU Only**: No GPU targeting (unlike Numba CUDA)
 

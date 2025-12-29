@@ -26,12 +26,19 @@ class Config:
         guard_overhead_budget: Maximum guard overhead as fraction of call time
         metrics_enabled: Enable detailed metrics collection (off by default)
         
-        Phase 5 - Inline Configuration:
+        Inline Configuration:
         inline_enabled: Enable call-boundary elimination inlining
         inline_min_calls: Minimum calls for inline eligibility
         inline_min_callee_share: Minimum callee share for monomorphism (0.0-1.0)
         inline_log_rejections: Log rejection reasons for debugging
         inline_telemetry_enabled: Enable per-callsite telemetry collection
+        
+        Adaptive Compilation:
+        adaptive_enabled: Enable unified adaptive compilation
+        use_type_hints: Check PEP 484 hints before profiling
+        continuous_pgo: Monitor guard failures and recompile on drift
+        drift_threshold: Guard failure rate that triggers recompile
+        source_hash_check: Invalidate cache on source code change
     """
     
     # Master switch
@@ -58,13 +65,20 @@ class Config:
     max_variants_per_function: int = 4
     lru_cache_size: int = 128
     
-    # Phase 5: Inline Configuration
+    # Inline Configuration
     inline_enabled: bool = True  # Master switch for inlining
     inline_min_calls: int = 1000  # Higher threshold than general compilation
     inline_min_callee_share: float = 0.995  # 99.5% monomorphism required
     inline_log_rejections: bool = False  # Log why callsites are rejected
     inline_telemetry_enabled: bool = False  # Per-callsite metrics
-    inline_max_depth: int = 1  # No deep inlining in Phase 5
+    inline_max_depth: int = 1  # No deep inlining
+    
+    # Adaptive Compilation Configuration
+    adaptive_enabled: bool = True  # Master switch for adaptive compilation
+    use_type_hints: bool = True  # Check hints before profiling
+    continuous_pgo: bool = True  # Monitor and recompile on drift
+    drift_threshold: float = 0.005  # Guard failure rate to trigger recompile (0.5%)
+    source_hash_check: bool = True  # Invalidate cache on source change
     
     def __post_init__(self):
         """Ensure cache directory exists."""
@@ -101,12 +115,19 @@ def load_config_from_env() -> Config:
         AOT_MIN_STABILITY: Minimum stability score (0.0-1.0)
         AOT_METRICS_ENABLED: Set to "1" to enable metrics
         
-        Phase 5 - Inline Configuration:
+        Inline Configuration:
         AOT_INLINE_ENABLED: Set to "0" to disable inlining
         AOT_INLINE_MIN_CALLS: Minimum calls for inline eligibility (default 1000)
         AOT_INLINE_MIN_CALLEE_SHARE: Minimum callee share (default 0.995)
         AOT_INLINE_LOG_REJECTIONS: Set to "1" to log rejection reasons
         AOT_INLINE_TELEMETRY: Set to "1" to enable per-callsite telemetry
+        
+        Adaptive Compilation:
+        AOT_ADAPTIVE_ENABLED: Set to "0" to disable adaptive compilation
+        AOT_USE_TYPE_HINTS: Set to "0" to skip type hint extraction
+        AOT_CONTINUOUS_PGO: Set to "0" to disable continuous monitoring
+        AOT_DRIFT_THRESHOLD: Guard failure rate threshold (default 0.005)
+        AOT_SOURCE_HASH_CHECK: Set to "0" to disable source hash validation
     """
     config = Config()
     
@@ -143,7 +164,7 @@ def load_config_from_env() -> Config:
     if os.environ.get("AOT_METRICS_ENABLED", "0") == "1":
         config.metrics_enabled = True
     
-    # Phase 5: Inline Configuration
+    # Inline Configuration
     if os.environ.get("AOT_INLINE_ENABLED", "1") == "0":
         config.inline_enabled = False
     
@@ -158,6 +179,22 @@ def load_config_from_env() -> Config:
     
     if os.environ.get("AOT_INLINE_TELEMETRY", "0") == "1":
         config.inline_telemetry_enabled = True
+    
+    # Adaptive Compilation Configuration
+    if os.environ.get("AOT_ADAPTIVE_ENABLED", "1") == "0":
+        config.adaptive_enabled = False
+    
+    if os.environ.get("AOT_USE_TYPE_HINTS", "1") == "0":
+        config.use_type_hints = False
+    
+    if os.environ.get("AOT_CONTINUOUS_PGO", "1") == "0":
+        config.continuous_pgo = False
+    
+    if drift_threshold := os.environ.get("AOT_DRIFT_THRESHOLD"):
+        config.drift_threshold = max(0.0, min(1.0, float(drift_threshold)))
+    
+    if os.environ.get("AOT_SOURCE_HASH_CHECK", "1") == "0":
+        config.source_hash_check = False
     
     return config
 

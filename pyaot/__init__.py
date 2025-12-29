@@ -22,6 +22,22 @@ from pyaot.exceptions import (
     EligibilityError,
 )
 
+# Import adaptive compilation
+from pyaot.adaptive import (
+    adaptive,
+    compile_adaptive,
+    get_adaptive_compiler,
+    AdaptiveCompiler,
+    NativeArtifact,
+)
+
+# Import type hints
+from pyaot.hints import (
+    extract_type_hints,
+    has_compilable_hints,
+    TypeHintExtractor,
+)
+
 # Public API
 __all__ = [
     # Configuration
@@ -33,6 +49,16 @@ __all__ = [
     "GuardFailure",
     "CacheError",
     "EligibilityError",
+    # Adaptive Compilation
+    "adaptive",
+    "compile_adaptive",
+    "get_adaptive_compiler",
+    "AdaptiveCompiler",
+    "NativeArtifact",
+    # Type Hints
+    "extract_type_hints",
+    "has_compilable_hints",
+    "TypeHintExtractor",
     # Version
     "__version__",
 ]
@@ -51,3 +77,4 @@ def disable() -> None:
 def is_enabled() -> bool:
     """Check if AOT compilation is enabled."""
     return get_config().enabled
+
