@@ -49,47 +49,153 @@ Dynamic: license-file
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-green.svg)](LICENSE)
 
-PyAOT is a production-grade system that identifies hot execution paths in Python programs, selectively compiles eligible functions into native code, and seamlessly integrates compiled artifacts back into CPython execution with strict correctness guarantees.
+PyAOT is a profile-guided ahead-of-time (AOT) compilation system that identifies hot execution paths in Python programs, selectively compiles eligible functions into native machine code, and seamlessly integrates compiled artifacts back into CPython execution with strict correctness guarantees.
 
-## Design Principle
+---
 
-> **This system optimizes reality, not Python as a language. Profiling defines truth; compilation freezes it; guards preserve safety.**
+## Table of Contents
+
+- [Introduction](#introduction)
+- [Core Design Principle](#core-design-principle)
+- [Features](#features)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [How It Works](#how-it-works)
+- [Architecture Overview](#architecture-overview)
+- [Supported Python Subset](#supported-python-subset)
+- [Configuration](#configuration)
+- [Performance Characteristics](#performance-characteristics)
+- [Comparison with Alternatives](#comparison-with-alternatives)
+- [API Reference](#api-reference)
+- [Development](#development)
+- [Limitations](#limitations)
+- [Contributing](#contributing)
+- [License](#license)
+- [References](#references)
+
+---
+
+## Introduction
+
+### Problem Statement
+
+Python's dynamic typing enables rapid development but imposes significant runtime overhead. Each operation requires type dispatch, object allocation, and reference counting—overheads that accumulate in tight loops. For numeric workloads, pure Python code can execute 10-100× slower than equivalent native implementations.
+
+### Approach
+
+PyAOT addresses this through **profile-guided optimization**:
+
+1. **Observe** actual runtime behavior during normal execution
+2. **Identify** functions with stable type patterns (hot paths)
+3. **Compile** eligible functions to native code via LLVM
+4. **Guard** compiled code with runtime type checks
+5. **Dispatch** to native or fallback based on guard evaluation
+
+This approach provides native-speed execution for qualifying workloads while maintaining full Python semantics for unsupported patterns.
+
+### Relationship to Python 3.13+ JIT
+
+Python 3.13 introduced an experimental JIT compiler (PEP 744) using a "copy-and-patch" approach targeting bytecode execution. PyAOT and CPython's JIT are **complementary**:
+
+| Aspect | CPython 3.13 JIT | PyAOT |
+|--------|------------------|-------|
+| Target | All bytecode | Selected hot paths |
+| Optimization | Inline caching | Type specialization + LLVM |
+| Integration | Built-in | Library |
+| Speedup | Modest (documented 0-10%) | Significant for numeric code |
+
+PyAOT provides deeper optimization for numeric workloads, while CPython's JIT provides broad modest improvements. Both can operate simultaneously.
+
+---
+
+## Core Design Principle
+
+> **"This system optimizes reality, not Python as a language. Profiling defines truth; compilation freezes it; guards preserve safety."**
+
+This principle ensures:
+- Compilation decisions are based on observed behavior, not speculation
+- Type assumptions are validated at runtime via guards
+- Correctness is never sacrificed for performance
+
+---
 
 ## Features
 
-- 📊 **Automatic Hot Path Detection** - Profile-guided identification of performance-critical functions
-- 🔍 **Type Inference** - Automatic inference of stable type and shape information
-- ⚡ **Native Compilation** - AOT compilation via LLVM for eligible functions
-- 🛡️ **Safe Guards** - Runtime checks with automatic fallback to Python
-- 💾 **Artifact Caching** - Content-addressed cache for compiled artifacts
-- 🔧 **Zero Source Changes** - Works with unmodified Python code
+### Automatic Hot Path Detection
+Profile-guided identification of performance-critical functions based on call frequency, execution time, and type stability. No manual annotation required.
+
+### Type Inference
+Automatic inference of stable type and shape information from runtime observations. Supports primitives (`int`, `float`, `bool`), typed containers, and NumPy arrays.
+
+### Native Compilation
+AOT compilation via LLVM for eligible functions. Generates platform-native code with optimization passes for dead code elimination, loop optimization, and vectorization.
+
+### Safe Guards
+Lightweight runtime checks that validate type assumptions. Guard failures result in transparent fallback to Python interpretation—never crashes or incorrect results.
+
+### Artifact Caching
+Content-addressed persistent cache for compiled artifacts. Supports ABI validation, LRU eviction, and cross-session reuse.
+
+### Zero Source Changes
+Operates on unmodified Python code. Hot paths are discovered automatically; no decorators or type annotations required (though type hints are respected when present).
+
+---
 
 ## Installation
 
+### Basic Installation
+
 ```bash
-# Basic installation
 pip install pyaot
+```
 
-# With LLVM support (for compilation)
+### With LLVM Support (Required for Compilation)
+
+```bash
 pip install pyaot[llvm]
+```
 
-# With all optional dependencies
+### With NumPy Support (Recommended)
+
+```bash
+pip install pyaot[numpy]
+```
+
+### Full Installation
+
+```bash
 pip install pyaot[all]
+```
 
-# Development installation
+### Development Installation
+
+```bash
+git clone https://github.com/pyaot/pyaot.git
+cd pyaot
 pip install -e .[dev]
 ```
 
+---
+
 ## Quick Start
 
-### 1. Profile Your Code
+### 1. Profile Code
 
 ```python
 from pyaot.profiler import profiling_session
 
+def sum_array(arr):
+    total = 0.0
+    for x in arr:
+        total += x
+    return total
+
+# Profile the hot path
+large_array = [float(i) for i in range(1_000_000)]
+
 with profiling_session(save_path="profile.json") as collector:
-    # Your hot path code here
-    result = sum_array(large_array)
+    for _ in range(100):
+        result = sum_array(large_array)
 
 data = collector.get_data()
 print(f"Profiled {len(data)} functions")
@@ -106,7 +212,7 @@ print(get_hotness_report(data))
 
 candidates = select_candidates(data)
 for c in candidates:
-    print(f"{c.key}: hotness={c.hotness:.2f}")
+    print(f"{c.key}: hotness={c.hotness:.2f}, stability={c.stability_score:.2f}")
 ```
 
 ### 3. Use CLI
@@ -127,146 +233,401 @@ pyaot cache stats
 pyaot cache clear
 ```
 
+---
+
 ## How It Works
 
+PyAOT operates in five phases:
+
+```mermaid
+graph LR
+    A[Phase 1: Observation] --> B[Phase 2: Selection]
+    B --> C[Phase 3: Compilation]
+    C --> D[Phase 4: Deployment]
+    D --> E[Phase 5: Execution]
+```
+
 ### Phase 1: Observation
-Execute Python normally while collecting:
-- Function call frequencies
-- Argument types and shapes
-- Inclusive wall-time per function
-- Callee relationships
+
+The profiler collects runtime statistics using `sys.setprofile`:
+
+- **Function call frequency**: How often each function is invoked
+- **Argument types and shapes**: Observed type signatures
+- **Inclusive wall-time**: Total time spent in each function
+- **Callee relationships**: Call graph edges
+
+Sampling (default: 1 in 1000 calls) maintains <5% overhead.
 
 ### Phase 2: Selection
-Rank functions by hotness score:
+
+Functions are ranked by **hotness score**:
+
 ```
 type_stability = dominant_type_calls / total_calls
 shape_stability = dominant_shape_calls / total_calls
-stability_score = 0.5 * type_stability + 0.5 * shape_stability
+stability_score = 0.5 × type_stability + 0.5 × shape_stability
 hotness = cpu_time × call_count × stability_score
 ```
 
-Eligibility thresholds:
+Eligibility requires:
 - `call_count ≥ 100`
 - `stability_score ≥ 0.95`
+- No disallowed patterns (eval, exec, dynamic imports, etc.)
 
 ### Phase 3: Compilation
-- Lower eligible functions to typed IR
-- Apply optimizations (type specialization, loop lowering)
-- Generate native code via LLVM
+
+Eligible functions are compiled through:
+
+1. **AST Lowering**: Python AST → PyAOT IR
+2. **Type Specialization**: IR annotated with inferred types
+3. **Optimization**: Dead code elimination, constant folding
+4. **Code Generation**: IR → LLVM IR → native code
 
 ### Phase 4: Deployment
-- Cache artifacts with content-addressed keys
-- Load dynamically at runtime
-- Replace call sites with guarded dispatchers
+
+Compiled artifacts are stored in a content-addressed cache:
+
+```
+~/.aot_cache/
+├── a1/
+│   ├── a1b2c3d4...so    # Native artifact
+│   └── a1b2c3d4...json  # Metadata
+```
+
+ABI compatibility is validated before loading.
 
 ### Phase 5: Execution
+
+The guarded dispatcher routes calls:
+
 ```python
-# Automatic dispatch
-if guards_pass(args):
-    return native_impl(*args)  # Fast path
-else:
-    return python_impl(*args)  # Safe fallback
+def dispatch(*args):
+    if guards_pass(args):
+        return native_impl(*args)  # Fast path
+    else:
+        return python_impl(*args)  # Safe fallback
 ```
+
+Guard failures are silent—execution continues correctly via fallback.
+
+---
+
+## Architecture Overview
+
+For comprehensive architecture documentation, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+### Directory Structure
+
+```
+pyaot/
+├── profiler/           # Runtime profiling (Phase 1)
+│   ├── collector.py    # sys.setprofile-based collection
+│   ├── data.py         # ProfileData, FunctionProfile
+│   └── context.py      # Context managers
+├── selector/           # Function selection (Phase 2)
+│   ├── scorer.py       # Hotness scoring
+│   ├── eligibility.py  # AST analysis
+│   └── ranker.py       # Candidate ranking
+├── types/              # Type system & guards (Phase 3 & 5)
+│   ├── inference.py    # Type inference
+│   ├── guards.py       # Runtime guards
+│   └── dispatcher.py   # Guarded dispatch
+├── compiler/           # AOT compilation (Phase 3)
+│   ├── ir.py           # Intermediate representation
+│   ├── lowering.py     # AST → IR transformation
+│   ├── codegen.py      # LLVM code generation
+│   └── numpy_support.py# NumPy operation support
+├── cache/              # Artifact management (Phase 4)
+│   ├── hasher.py       # Content-addressed hashing
+│   ├── storage.py      # Persistent storage
+│   └── lru.py          # LRU eviction
+└── cli/                # Command-line interface
+    └── main.py         # CLI entry point
+```
+
+---
 
 ## Supported Python Subset
 
-### ✅ Allowed
-- Pure or mostly-pure functions
-- Numeric types (`int`, `float`, `bool`)
-- Typed containers with stable shapes
-- NumPy arrays and buffers
-- Deterministic loops
-- Calls to compiled/whitelisted functions
+### ✅ Allowed Constructs
 
-### ❌ Disallowed
-- `eval`, `exec`
-- Dynamic attribute injection
-- Monkey patching
-- Reflection with dynamic names
-- Dynamic imports
-- Exception-driven control flow
+| Category | Examples |
+|----------|----------|
+| **Numeric Types** | `int`, `float`, `bool` |
+| **Containers** | `list`, `tuple` (typed, stable shape) |
+| **NumPy** | `ndarray`, standard ufuncs |
+| **Control Flow** | `if`, `for`, `while`, `return` |
+| **Operations** | Arithmetic, comparison, boolean ops |
+| **Functions** | Pure functions, whitelisted builtins |
+| **Loops** | `for i in range(n)`, counted iteration |
+
+### ❌ Disallowed Constructs
+
+| Pattern | Reason |
+|---------|--------|
+| `eval`, `exec` | Dynamic code generation |
+| Dynamic `getattr` | Unpredictable attribute access |
+| Monkey patching | Global state mutation |
+| Reflection w/ dynamic names | Type unpredictability |
+| Dynamic imports | Unpredictable dependencies |
+| Exception-driven control flow | Complex CFG modeling |
+
+---
 
 ## Configuration
 
-Environment variables:
-```bash
-AOT_DISABLED=1        # Disable AOT entirely
-AOT_CACHE_DIR=/path   # Custom cache directory
-AOT_LOG_LEVEL=DEBUG   # Logging verbosity
-AOT_SAMPLE_RATE=1000  # Profiling sample rate
-AOT_MIN_CALLS=100     # Minimum call count
-AOT_MIN_STABILITY=0.95 # Minimum stability score
-```
+### Environment Variables
 
-Programmatic:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AOT_DISABLED` | `0` | Set to `1` to disable AOT entirely |
+| `AOT_CACHE_DIR` | `~/.aot_cache` | Custom cache directory |
+| `AOT_LOG_LEVEL` | `WARNING` | Logging verbosity (DEBUG, INFO, WARNING, ERROR) |
+| `AOT_SAMPLE_RATE` | `1000` | Profiling sample rate (1 in N) |
+| `AOT_MIN_CALLS` | `100` | Minimum call count for eligibility |
+| `AOT_MIN_STABILITY` | `0.95` | Minimum stability score (0.0-1.0) |
+| `AOT_METRICS_ENABLED` | `0` | Set to `1` to enable metrics collection |
+
+### Programmatic Configuration
+
 ```python
 from pyaot import enable, disable, is_enabled
 from pyaot.config import get_config
 
+# Global enable/disable
+enable()
+disable()
+print(is_enabled())
+
+# Detailed configuration
 config = get_config()
 config.min_call_count = 50
+config.min_stability_score = 0.90
 config.cache_dir = Path("/custom/cache")
+config.sample_rate = 500
 ```
 
-## Performance Targets
+---
 
-| Benchmark | Target |
-|-----------|--------|
-| Numeric loops (1M elements) | ≥2× speedup |
-| End-to-end workload | ≥1.5× speedup |
-| Guard overhead | <5% of call time |
-| Cold path regression | Zero |
+## Performance Characteristics
 
-## Safety Guarantees
+For detailed benchmark methodology and results, see [BENCHMARK.md](BENCHMARK.md).
 
-- ✅ Never change Python observable behavior
-- ✅ Never elide side effects incorrectly
-- ✅ Never assume global immutability unless proven
-- ✅ Always prefer fallback over speculative optimization
-- ✅ Guard failures never crash or corrupt state
+### Summary Performance Targets
+
+| Benchmark | Target | Measured (Theoretical Ceiling) |
+|-----------|--------|--------------------------------|
+| Numeric loops (1M elements) | ≥2× speedup | 78× (Python vs NumPy) |
+| End-to-end workload | ≥1.5× speedup | Application-dependent |
+| Guard overhead | <5% of call time | Achievable for numeric code |
+| Cold path regression | Zero | Guaranteed by fallback |
+
+### Benchmark Results (Theoretical Ceiling)
+
+The following shows the maximum speedup achievable (pure Python vs NumPy):
+
+| Operation | Array Size | Python | NumPy | Speedup |
+|-----------|------------|--------|-------|---------|
+| Sum Array | 1M | 8.70ms | 0.11ms | **78×** |
+| Dot Product | 100K | 1.66ms | 0.002ms | **706×** |
+
+*Benchmark system: AMD Ryzen 7 9700X, Python 3.13.3, Linux*
+
+---
+
+## Comparison with Alternatives
+
+| System | Model | Type Handling | Integration | Best For |
+|--------|-------|---------------|-------------|----------|
+| **PyAOT** | Profile-guided AOT | Guards + fallback | Unmodified code | Automatic hot path optimization |
+| **Numba** | Decorator JIT | Type inference + specialization | `@jit` decorators | Explicit numeric functions |
+| **Cython** | Static AOT | C types in `.pyx` | Separate files | Maximum control/performance |
+| **PyPy** | Tracing JIT | Speculative + deopt | Alternative interpreter | General speedup |
+| **CPython 3.13 JIT** | Copy-and-patch | Inline caching | Built-in | Broad modest improvement |
+| **mypyc** | AOT from types | Static type hints | mypy integration | Typed codebases |
+
+### When to Use PyAOT
+
+- Numeric workloads with stable types
+- Cannot modify source code (legacy systems)
+- Need Python semantics for edge cases
+- Gradual optimization without rewriting
+
+### When to Consider Alternatives
+
+- **Numba**: Explicit control over compiled functions
+- **Cython**: Maximum performance, C interop needed
+- **PyPy**: Whole-program speedup, minimal effort
+- **mypyc**: Already have comprehensive type hints
+
+---
+
+## API Reference
+
+### pyaot.profiler
+
+```python
+# Context manager for profiling
+with profiling_session(
+    save_path: Optional[str] = None,
+    sample_rate: Optional[int] = None,
+) as collector:
+    # code to profile
+    pass
+
+data = collector.get_data()  # List[FunctionProfile]
+```
+
+### pyaot.selector
+
+```python
+from pyaot.selector import HotnessScorer, EligibilityChecker, select_candidates
+
+# Score functions by hotness
+scorer = HotnessScorer(min_call_count=100, min_stability=0.95)
+scores = scorer.score_all(profile_data)
+
+# Check function eligibility
+checker = EligibilityChecker()
+result = checker.check_function(my_function)
+print(result.eligible, result.reasons)
+
+# Get compilation candidates
+candidates = select_candidates(profile_data)
+```
+
+### pyaot.config
+
+```python
+from pyaot.config import get_config, Config
+
+config = get_config()
+config.enabled = True
+config.cache_dir = Path("/path")
+config.min_call_count = 100
+config.min_stability_score = 0.95
+config.sample_rate = 1000
+```
+
+### pyaot.cache
+
+```python
+from pyaot.cache import CacheStorage
+
+storage = CacheStorage()
+stats = storage.get_stats()
+artifacts = storage.list_artifacts()
+storage.clear()
+```
+
+---
 
 ## Development
 
+### Running Tests
+
 ```bash
-# Run tests
+# All tests
 pytest tests/ -v
 
-# Run benchmarks
-python benchmarks/bench_numeric_loop.py
+# Specific test file
+pytest tests/test_profiler.py -v
 
-# Run example
+# With coverage
+pytest tests/ --cov=pyaot
+```
+
+### Running Benchmarks
+
+```bash
+python benchmarks/bench_numeric_loop.py
+```
+
+### Running Examples
+
+```bash
 python examples/numeric_sum.py
 ```
 
-## Architecture
+### Code Quality
 
+```bash
+# Format
+black pyaot/ tests/
+isort pyaot/ tests/
+
+# Type check
+mypy pyaot/
+
+# Lint
+ruff pyaot/
 ```
-pyaot/
-├── profiler/       # Runtime profiling (Phase 1)
-│   ├── collector.py
-│   ├── data.py
-│   └── context.py
-├── selector/       # Function selection (Phase 2)
-│   ├── scorer.py
-│   ├── eligibility.py
-│   └── ranker.py
-├── types/          # Type system & guards (Phase 3)
-│   ├── inference.py
-│   ├── guards.py
-│   └── dispatcher.py
-├── compiler/       # AOT compilation (Phase 3)
-│   ├── ir.py
-│   ├── lowering.py
-│   ├── codegen.py
-│   └── numpy_support.py
-├── cache/          # Artifact management (Phase 4)
-│   ├── hasher.py
-│   ├── storage.py
-│   └── lru.py
-└── cli/            # Command-line interface
-    └── main.py
-```
+
+---
+
+## Limitations
+
+### Current Limitations
+
+1. **Python Subset**: Only a subset of Python constructs can be compiled
+2. **NumPy Dependency**: Array operations require NumPy for type/shape information
+3. **Cold Start**: Initial profiling phase adds overhead before benefits
+4. **Single Variant**: Each compiled artifact handles one dominant type signature
+5. **CPU Only**: No GPU targeting (unlike Numba CUDA)
+
+### Known Issues
+
+- LLVM dependency is large (~100MB)
+- Compilation time can be significant for complex functions
+- Not suitable for highly polymorphic code
+
+---
+
+## Safety Guarantees
+
+PyAOT provides strong safety guarantees:
+
+| Guarantee | Description |
+|-----------|-------------|
+| **Semantic Preservation** | Compiled code produces identical results to Python |
+| **Side Effect Correctness** | Observable effects occur in the same order |
+| **No Crash on Guard Failure** | Failures trigger fallback, not exceptions |
+| **State Consistency** | Guard failures never corrupt program state |
+| **Global Immutability** | Globals are not assumed immutable unless proven |
+
+---
+
+## Contributing
+
+Contributions are welcome. Please see the development section for setup instructions.
+
+1. Fork the repository
+2. Create a feature branch
+3. Add tests for new functionality
+4. Ensure all tests pass
+5. Submit a pull request
+
+---
 
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) for details.
+
+---
+
+## References
+
+### Primary Documentation
+
+- [Architecture Documentation](ARCHITECTURE.md) - System design, component details, design decisions
+- [Benchmark Methodology](BENCHMARK.md) - Performance analysis, reproducibility, comparative study
+
+### External References
+
+1. **Profile-Guided Optimization**: [LLVM PGO Documentation](https://llvm.org/docs/HowToBuildWithPGO.html)
+2. **CPython JIT (PEP 744)**: [PEP 744 – JIT Compilation](https://peps.python.org/pep-0744/)
+3. **Numba**: Lam et al., "Numba: A LLVM-based Python JIT Compiler," LLVM-HPC 2015
+4. **NumPy**: Harris et al., "Array programming with NumPy," Nature 585, 357–362 (2020)
+5. **PyPy**: Bolz et al., "Tracing the Meta-Level: PyPy's Tracing JIT Compiler," ICOOOLPS 2009
+6. **llvmlite**: [llvmlite Documentation](https://llvmlite.readthedocs.io/)
+7. **Type Stability in Julia**: Bezanson et al., "Julia: Dynamism and Performance Reconciled by Design," OOPSLA 2018

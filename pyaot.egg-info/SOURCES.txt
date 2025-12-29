@@ -31,6 +31,12 @@ pyaot/selector/__init__.py
 pyaot/selector/eligibility.py
 pyaot/selector/ranker.py
 pyaot/selector/scorer.py
+pyaot/shapes/__init__.py
+pyaot/shapes/_fast_attr.c
+pyaot/shapes/fast_attr.py
+pyaot/shapes/registry.py
+pyaot/shapes/shape.py
+pyaot/shapes/tracker.py
 pyaot/types/__init__.py
 pyaot/types/dispatcher.py
 pyaot/types/guards.py
@@ -39,3 +45,4 @@ tests/test_cache.py
 tests/test_guards.py
 tests/test_profiler.py
 tests/test_selector.py
+tests/test_shapes.py

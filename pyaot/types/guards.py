@@ -17,11 +17,13 @@ from pyaot.logging import log_guard_failure
 
 class GuardKind(Enum):
     """Types of guards."""
-    TYPE = auto()       # isinstance check
-    SHAPE = auto()      # Array shape check
-    DTYPE = auto()      # Array dtype check
+    TYPE = auto()            # isinstance check
+    SHAPE = auto()           # Array shape check
+    DTYPE = auto()           # Array dtype check
     GLOBAL_VERSION = auto()  # Global variable versioning
     VALUE_RANGE = auto()     # Value bounds check
+    SHAPE_STABLE = auto()    # Object shape stability check (Phase 2)
+    TYPE_IDENTITY = auto()   # Exact type identity (type(x) is T)
 
 
 @dataclass
