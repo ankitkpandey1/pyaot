@@ -278,12 +278,23 @@ class AdaptiveCompiler:
         
         Returns the native callable, or None if compilation fails.
         
-        Note: Currently returns None to use Python function with guard checking.
-        Full LLVM compilation is work in progress.
+        NOTE: Currently disabled due to IR lowering issues causing segfaults.
+        The Python function with guard checking still provides value by
+        validating types at runtime and enabling future LLVM integration.
+        
+        TODO: Fix IR lowering to produce safe ctypes-callable native code.
         """
-        # For now, return None to use Python function with guard checking.
-        # The guard checking still provides value by validating types at runtime.
-        # Full LLVM native compilation will be enabled once stable.
+        # Native LLVM compilation is temporarily disabled.
+        # The current IR lowering produces code that causes segfaults when
+        # called via ctypes. This needs investigation:
+        # 1. The IR doesn't properly handle Python object boxing/unboxing
+        # 2. The ctypes wrapper signature doesn't match the native function
+        # 3. The LLVM execution engine may need to stay alive longer
+        #
+        # For now, use Python function with guard checking which still provides:
+        # - Type validation at runtime
+        # - Guard failure tracking for drift detection
+        # - Source hash invalidation for recompilation
         return None
     
     def _create_sample_args(self, signature: FunctionSignature) -> tuple:
