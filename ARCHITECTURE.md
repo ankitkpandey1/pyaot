@@ -14,8 +14,9 @@ PyAOT implements a profile-guided ahead-of-time (AOT) compilation system for Pyt
    - [Profiler Subsystem](#31-profiler-subsystem)
    - [Selector Subsystem](#32-selector-subsystem)
    - [Type System](#33-type-system)
-   - [Compiler Subsystem](#34-compiler-subsystem)
-   - [Cache Subsystem](#35-cache-subsystem)
+   - [Shape System](#34-shape-system)
+   - [Compiler Subsystem](#35-compiler-subsystem)
+   - [Cache Subsystem](#36-cache-subsystem)
 4. [Data Flow](#4-data-flow)
 5. [Design Decisions](#5-design-decisions)
 6. [Comparison with Related Systems](#6-comparison-with-related-systems)
@@ -256,7 +257,120 @@ def __call__(self, *args, **kwargs):
 
 Guard overhead is budgeted at <5% of call time.
 
-### 3.4 Compiler Subsystem
+### 3.4 Shape System
+
+**Location**: `pyaot/shapes/`
+
+The shape system provides side-table tracking of object attribute layouts, enabling fast attribute access optimization without modifying CPython object layout.
+
+#### Shape Definition
+
+A **shape** is an immutable identifier describing an object's attribute layout:
+
+```python
+@dataclass(frozen=True)
+class Shape:
+    type_id: int              # id(type(obj))
+    dict_keys: Tuple[str, ...]  # tuple(obj.__dict__.keys())
+```
+
+Shapes capture the "structure" of an object's instance dictionary without accessing CPython internals.
+
+#### Architecture
+
+```mermaid
+graph TD
+    subgraph "Shape System"
+        SR[ShapeRegistry]
+        ST[ShapeTracker]
+        FA[Fast Attr Access]
+    end
+    
+    subgraph "Runtime"
+        OBJ[Python Object]
+        GUARD[Shape Guard]
+    end
+    
+    OBJ --> ST
+    ST --> SR
+    ST --> GUARD
+    GUARD --> FA
+    FA --> |Success| FAST[Fast Path]
+    FA --> |Failure| SLOW[getattr Fallback]
+```
+
+#### Key Components
+
+| Component | Responsibility |
+|-----------|----------------|
+| `Shape` | Immutable descriptor: `(type_id, dict_keys)` |
+| `ShapeRegistry` | Thread-safe global registry with ID assignment |
+| `ShapeTracker` | Type-level stability detection (95% threshold) |
+| `fast_getattr` | C extension for low-overhead attribute access |
+| `guarded_attr_access` | Python wrapper with automatic fallback |
+
+#### Shape Stability Detection
+
+The `ShapeTracker` observes objects during profiling and determines which types have stable shapes:
+
+```python
+class ShapeTracker:
+    def observe_object(self, obj) -> ShapeID:
+        """Record shape observation for stability analysis."""
+        
+    def is_type_stable(self, type_id: int) -> bool:
+        """Check if type has ≥95% consistent shape."""
+        
+    def get_common_shape(self, type_id: int) -> Optional[ShapeID]:
+        """Get the dominant shape for stable types."""
+```
+
+A type is considered **shape-stable** when ≥95% of observed instances share the same shape (attribute layout).
+
+#### C Extension API
+
+The `_fast_attr.c` extension provides low-overhead attribute access:
+
+```c
+PyObject* fast_getattr(obj, expected_type, interned_attr_name)
+```
+
+Semantics:
+- Returns attribute value on success
+- Returns `GUARD_FAILED` sentinel on guard failure
+- Uses `PyDict_GetItemWithError` (safe across CPython versions)
+- Never raises exceptions internally
+
+#### Guard Strategy
+
+Attribute access optimization follows this exact pattern:
+
+1. **Guard on type identity**: `type(obj) is expected_type`
+2. **Guard on shape stability**: `tracker.is_type_stable(type_id)`
+3. **Perform fast attribute access** via interned name lookup
+4. **Fallback** to `getattr(obj, name)` on any guard failure
+
+```mermaid
+flowchart TD
+    A[Attribute Access] --> B{Type Guard}
+    B -->|Pass| C{Shape Stable?}
+    B -->|Fail| F[getattr Fallback]
+    C -->|Yes| D[Fast Dict Lookup]
+    C -->|No| F
+    D -->|Found| E[Return Value]
+    D -->|NotFound| F
+```
+
+#### Safety Guarantees
+
+| Guarantee | Implementation |
+|-----------|----------------|
+| Semantic preservation | Fast path returns identical values to `getattr()` |
+| No crash on guard failure | Returns sentinel, caller falls back |
+| Thread safety | Registry and Tracker use internal locks |
+| CPython ABI safe | Uses only public C API functions |
+
+### 3.5 Compiler Subsystem
 
 **Location**: `pyaot/compiler/`
 
@@ -311,7 +425,7 @@ The `LLVMCodegen` class uses `llvmlite` to generate native code:
 4. JIT compile to native function pointer
 5. Create ctypes wrapper for Python interop
 
-### 3.5 Cache Subsystem
+### 3.6 Cache Subsystem
 
 **Location**: `pyaot/cache/`
 

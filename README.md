@@ -89,6 +89,9 @@ AOT compilation via LLVM for eligible functions. Generates platform-native code 
 ### Safe Guards
 Lightweight runtime checks that validate type assumptions. Guard failures result in transparent fallback to Python interpretation—never crashes or incorrect results.
 
+### Shape System (Phase 2)
+Side-table tracking of object attribute layouts enables fast attribute access optimization. The system detects types with stable shapes (consistent `__dict__` layouts) and provides a C extension for low-overhead attribute access. Shape guards ensure correctness with automatic fallback.
+
 ### Artifact Caching
 Content-addressed persistent cache for compiled artifacts. Supports ABI validation, LRU eviction, and cross-session reuse.
 
@@ -288,6 +291,12 @@ pyaot/
 │   ├── inference.py    # Type inference
 │   ├── guards.py       # Runtime guards
 │   └── dispatcher.py   # Guarded dispatch
+├── shapes/             # Shape system (Phase 2)
+│   ├── shape.py        # Shape dataclass
+│   ├── registry.py     # Global shape registry
+│   ├── tracker.py      # Type-level stability tracking
+│   ├── fast_attr.py    # Python wrapper for fast access
+│   └── _fast_attr.c    # C extension
 ├── compiler/           # AOT compilation (Phase 3)
 │   ├── ir.py           # Intermediate representation
 │   ├── lowering.py     # AST → IR transformation
