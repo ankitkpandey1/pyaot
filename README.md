@@ -625,6 +625,17 @@ ruff pyaot/
 - Compilation time can be significant for complex functions
 - Not suitable for highly polymorphic code
 
+### Future Work
+
+The following modules are implemented but frozen for future development:
+
+| Module | Status | Description |
+|--------|--------|-------------|
+| `pyaot/gpu/` | Frozen | CUDA backend for GPU acceleration |
+| `pyaot/compiler/vectorizer.py` | Frozen | SIMD loop vectorization |
+| `pyaot/compiler/call_graph.py` | Frozen | Multi-function call graph analysis |
+| `pyaot/numpy/fusion.py` | Frozen | NumPy operation fusion |
+
 ---
 
 ## Safety Guarantees
