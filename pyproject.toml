@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyaot"
-version = "0.1.0"
+version = "0.2.0"
 description = "Profile-Guided Ahead-of-Time Compilation for Python Hot Paths"
 readme = "README.md"
-license = {text = "Apache-2.0"}
+license = {text = "MIT"}
 authors = [
     {name = "PyAOT Contributors"}
 ]
@@ -18,19 +18,28 @@ keywords = [
     "optimization",
     "profiling",
     "llvm",
+    "jit",
+    "simd",
+    "vectorization",
+    "gpu",
+    "cuda",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Compilers",
     "Topic :: System :: Performance",
+    "Topic :: Scientific/Engineering",
 ]
 requires-python = ">=3.9"
 dependencies = []
@@ -39,6 +48,7 @@ dependencies = []
 llvm = ["llvmlite>=0.40.0"]
 cli = ["click>=8.0"]
 numpy = ["numpy>=1.20"]
+gpu = ["cupy-cuda12x>=12.0"]
 dev = [
     "pytest>=7.0",
     "pytest-benchmark>=4.0",
@@ -58,10 +68,11 @@ pyaot = "pyaot.cli:main"
 aot = "pyaot.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/pyaot/pyaot"
-Documentation = "https://github.com/pyaot/pyaot#readme"
-Repository = "https://github.com/pyaot/pyaot"
-Issues = "https://github.com/pyaot/pyaot/issues"
+Homepage = "https://github.com/ankitkpandey1/pyaot"
+Documentation = "https://github.com/ankitkpandey1/pyaot#readme"
+Repository = "https://github.com/ankitkpandey1/pyaot"
+Issues = "https://github.com/ankitkpandey1/pyaot/issues"
+Changelog = "https://github.com/ankitkpandey1/pyaot/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["."]

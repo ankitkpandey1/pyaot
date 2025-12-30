@@ -193,6 +193,17 @@ class Opcode(Enum):
     LOOP_BODY = auto()       # Loop body marker
     LOOP_LATCH = auto()      # Loop latch (back edge)
     LOOP_EXIT = auto()       # Loop exit marker
+    
+    # Exception handling
+    TRY_BEGIN = auto()       # Start try block
+    TRY_END = auto()         # End try block
+    EXCEPT = auto()          # Exception handler entry
+    EXCEPT_MATCH = auto()    # Check exception type match
+    RAISE = auto()           # Raise exception
+    RERAISE = auto()         # Re-raise current exception
+    FINALLY = auto()         # Finally block entry
+    FINALLY_END = auto()     # Finally block exit
+    LANDING_PAD = auto()     # LLVM landing pad for unwinding
 
 
 @dataclass
