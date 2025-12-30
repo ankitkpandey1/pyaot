@@ -316,17 +316,17 @@ if CLICK_AVAILABLE:
         else:
             if result.success:
                 click.echo(f"\n[PyAOT] Completed successfully (exit code: {result.exit_code})")
-                click.echo(f"\nTiming:")
+                click.echo("\nTiming:")
                 click.echo(f"  Observe: {result.observe_time_ms:>10.2f} ms")
                 click.echo(f"  Emit:    {result.emit_time_ms:>10.2f} ms")
                 click.echo(f"  Run:     {result.run_time_ms:>10.2f} ms")
                 click.echo(f"  Total:   {result.total_time_ms:>10.2f} ms")
-                click.echo(f"\nCallsite Statistics:")
+                click.echo("\nCallsite Statistics:")
                 click.echo(f"  Observed:   {result.callsites_observed}")
                 click.echo(f"  Candidates: {result.candidates_found}")
                 click.echo(f"  Inlined:    {result.callsites_inlined}")
                 if result.native_calls + result.fallback_calls > 0:
-                    click.echo(f"\nDispatch Statistics:")
+                    click.echo("\nDispatch Statistics:")
                     click.echo(f"  Native calls:   {result.native_calls}")
                     click.echo(f"  Fallback calls: {result.fallback_calls}")
                     click.echo(f"  Guard failure:  {result.guard_failure_rate:.2%}")

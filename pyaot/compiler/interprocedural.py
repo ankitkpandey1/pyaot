@@ -286,7 +286,7 @@ class InterproceduralOptimizer:
         if size > self._size_budget:
             return InliningDecision(
                 should_inline=False,
-                reason=f"Size budget exhausted",
+                reason="Size budget exhausted",
                 estimated_size_increase=size,
             )
         

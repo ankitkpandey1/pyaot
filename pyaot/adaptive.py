@@ -419,7 +419,6 @@ def get_adaptive_compiler() -> AdaptiveCompiler:
     """Get the global adaptive compiler."""
     global _adaptive_compiler
     if _adaptive_compiler is None:
-        config = get_config()
         _adaptive_compiler = AdaptiveCompiler(
             use_hints=True,
             continuous_monitoring=True,
