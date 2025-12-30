@@ -335,6 +335,101 @@ if CLICK_AVAILABLE:
         
         sys.exit(result.exit_code)
 
+    @cli.command()
+    def dashboard():
+        """Show the profiling dashboard.
+        
+        Displays statistics about compiled functions,
+        execution counts, and guard failure rates.
+        
+        Example:
+            pyaot dashboard
+        """
+        from pyaot.dashboard import show_dashboard
+        show_dashboard()
+
+    @cli.command()
+    @click.argument("script", type=click.Path(exists=True))
+    def diagnose(script: str):
+        """Diagnose a Python file for optimization opportunities.
+        
+        Analyzes the file and suggests changes for better
+        PyAOT compilation.
+        
+        Example:
+            pyaot diagnose script.py
+        """
+        from pyaot.diagnostics import diagnose_function
+        import ast
+        import importlib.util
+        
+        script_path = Path(script)
+        click.echo(f"Diagnosing {script}...")
+        click.echo()
+        
+        # Load module
+        spec = importlib.util.spec_from_file_location("_diagnose_module", script_path)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            try:
+                spec.loader.exec_module(module)
+                
+                # Find all functions
+                func_count = 0
+                for name in dir(module):
+                    obj = getattr(module, name)
+                    if callable(obj) and hasattr(obj, '__code__'):
+                        report = diagnose_function(obj)
+                        click.echo(report)
+                        click.echo()
+                        func_count += 1
+                
+                if func_count == 0:
+                    click.echo("No functions found to diagnose.")
+                else:
+                    click.echo(f"Diagnosed {func_count} function(s).")
+            except Exception as e:
+                click.echo(f"Error loading module: {e}", err=True)
+        else:
+            click.echo(f"Could not load {script}", err=True)
+
+    @cli.command()
+    def info():
+        """Show PyAOT system information.
+        
+        Displays available backends, GPU support, and configuration.
+        
+        Example:
+            pyaot info
+        """
+        from pyaot.config import get_config
+        from pyaot.compiler.codegen import LLVMLITE_AVAILABLE
+        from pyaot.gpu import CUDA_AVAILABLE, CUDA_BACKEND
+        
+        click.echo("PyAOT System Information")
+        click.echo("=" * 40)
+        click.echo()
+        
+        # Version
+        click.echo("Version: 0.1.0")
+        click.echo()
+        
+        # Backends
+        click.echo("Backends:")
+        click.echo(f"  LLVM (llvmlite): {'✓ Available' if LLVMLITE_AVAILABLE else '✗ Not installed'}")
+        click.echo(f"  CUDA: {'✓ Available (' + CUDA_BACKEND + ')' if CUDA_AVAILABLE else '✗ Not available'}")
+        click.echo()
+        
+        # Configuration
+        config = get_config()
+        click.echo("Configuration:")
+        click.echo(f"  Enabled: {config.enabled}")
+        click.echo(f"  Cache dir: {config.cache_dir}")
+        click.echo(f"  Sample rate: 1/{config.sample_rate}")
+        click.echo(f"  Min calls: {config.min_call_count}")
+        click.echo(f"  Inline enabled: {config.inline_enabled}")
+        click.echo(f"  Adaptive enabled: {config.adaptive_enabled}")
+
 
 def main():
     """Main entry point for CLI."""
@@ -344,3 +439,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

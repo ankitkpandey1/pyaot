@@ -18,7 +18,10 @@ PyAOT implements a profile-guided ahead-of-time (AOT) compilation system for Pyt
    - [Compiler Subsystem](#35-compiler-subsystem)
    - [Inline Subsystem](#36-inline-subsystem)
    - [Adaptive Subsystem](#37-adaptive-subsystem)
-   - [Cache Subsystem](#38-cache-subsystem)
+   - [Vectorization Subsystem](#38-vectorization-subsystem)
+   - [Multi-Function Subsystem](#39-multi-function-subsystem)
+   - [GPU Subsystem](#310-gpu-subsystem)
+   - [Cache Subsystem](#311-cache-subsystem)
 4. [Data Flow](#4-data-flow)
 5. [Design Decisions](#5-design-decisions)
 6. [Comparison with Related Systems](#6-comparison-with-related-systems)
@@ -519,7 +522,91 @@ graph TD
     MON -->|drift detected| AC
 ```
 
-### 3.8 Cache Subsystem
+### 3.8 Vectorization Subsystem
+
+**Location**: `pyaot/compiler/vectorizer.py`
+
+The vectorization subsystem transforms numeric loops to use SIMD instructions.
+
+#### Loop Detection and Analysis
+
+The `LoopVectorizer` analyzes loops for vectorization:
+
+```python
+from pyaot.compiler.vectorizer import LoopVectorizer
+
+vectorizer = LoopVectorizer()
+analyses = vectorizer.analyze_function(ir_func)
+
+for analysis in analyses:
+    if analysis.is_vectorizable:
+        print(f"Loop can use {analysis.vector_width}-wide SIMD")
+```
+
+#### Supported SIMD Targets
+
+| Platform | Target | Vector Width |
+|----------|--------|--------------|
+| x86_64 | SSE | 2×f64 (128-bit) |
+| x86_64 | AVX2 | 4×f64 (256-bit) |
+| x86_64 | AVX-512 | 8×f64 (512-bit) |
+| ARM | NEON | 2×f64 (128-bit) |
+
+### 3.9 Multi-Function Subsystem
+
+**Location**: `pyaot/compiler/call_graph.py`, `pyaot/compiler/interprocedural.py`
+
+Enables compilation of entire call chains as a single optimized unit.
+
+#### Call Graph Analysis
+
+```python
+from pyaot.compiler.call_graph import CallGraphAnalyzer
+
+analyzer = CallGraphAnalyzer()
+graph = analyzer.build_graph(entry_function)
+hot_chains = analyzer.find_hot_chains(graph, min_calls=1000)
+```
+
+#### Inter-Procedural Optimization
+
+The `InterproceduralOptimizer` inlines call chains:
+
+- Full inlining of chain functions
+- Constant propagation across boundaries
+- Dead code elimination
+
+### 3.10 GPU Subsystem
+
+**Location**: `pyaot/gpu/`
+
+Provides CUDA backend for GPU acceleration.
+
+#### Components
+
+| File | Description |
+|------|-------------|
+| `cuda_codegen.py` | Generate CUDA kernels from IR |
+| `runtime.py` | GPU memory and kernel management |
+| `array.py` | NumPy-compatible GPU arrays |
+
+#### GPUArray API
+
+```python
+from pyaot.gpu.array import GPUArray
+import numpy as np
+
+# Transfer to GPU
+arr = GPUArray.from_numpy(np.array([1.0, 2.0, 3.0]))
+
+# GPU operations
+result = (arr * 2.0).sum()
+
+# Transfer back
+cpu_arr = arr.to_numpy()
+```
+
+### 3.11 Cache Subsystem
 
 **Location**: `pyaot/cache/`
 

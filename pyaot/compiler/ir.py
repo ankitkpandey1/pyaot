@@ -21,6 +21,10 @@ class IRTypeKind(Enum):
     PTR = auto()      # Generic pointer
     ARRAY = auto()    # Array type (includes shape info)
     PYOBJ = auto()    # Python object pointer (PyObject*)
+    VECTOR = auto()   # SIMD vector type (for vectorization)
+    NDARRAY = auto()  # NumPy ndarray type
+    LIST = auto()     # Python list type
+    TUPLE = auto()    # Python tuple type
 
 
 @dataclass
@@ -62,6 +66,21 @@ class IRType:
     def pyobj(cls) -> "IRType":
         """Python object pointer (PyObject*)."""
         return cls(kind=IRTypeKind.PYOBJ)
+    
+    @classmethod
+    def vector(cls, element_type: "IRType", width: int = 4) -> "IRType":
+        """SIMD vector type.
+        
+        Args:
+            element_type: Element type (e.g., f64)
+            width: Number of elements (4 for AVX, 8 for AVX-512)
+        """
+        return cls(kind=IRTypeKind.VECTOR, element_type=element_type, shape=(width,))
+    
+    @classmethod
+    def i1(cls) -> "IRType":
+        """Boolean type alias."""
+        return cls(kind=IRTypeKind.BOOL)
     
     def to_llvm_str(self) -> str:
         """Get LLVM type string."""
@@ -147,13 +166,33 @@ class Opcode(Enum):
     SETATTR = auto()      # Set attribute on object
     GET_TYPE = auto()     # Get type of object (Py_TYPE)
     
-    # Guard operations (Phase 3)
+    # Guard operations
     GUARD_TYPE = auto()   # Guard: type(obj) is expected_type
     GUARD_FAIL = auto()   # Branch to fallback on guard failure
     
     # Python interop
     BOX = auto()          # Box native value to PyObject
     UNBOX = auto()        # Unbox PyObject to native value
+    
+    # SIMD/Vector operations (for loop vectorization)
+    SIMD_LOAD = auto()       # Load vector from memory
+    SIMD_STORE = auto()      # Store vector to memory
+    SIMD_ADD = auto()        # Vector addition
+    SIMD_SUB = auto()        # Vector subtraction
+    SIMD_MUL = auto()        # Vector multiplication
+    SIMD_DIV = auto()        # Vector division
+    SIMD_FADD = auto()       # Vector float addition
+    SIMD_FSUB = auto()       # Vector float subtraction
+    SIMD_FMUL = auto()       # Vector float multiplication
+    SIMD_FDIV = auto()       # Vector float division
+    SIMD_REDUCE_ADD = auto() # Horizontal sum of vector
+    SIMD_BROADCAST = auto()  # Broadcast scalar to vector
+    
+    # Loop control
+    LOOP_HEADER = auto()     # Loop header marker
+    LOOP_BODY = auto()       # Loop body marker
+    LOOP_LATCH = auto()      # Loop latch (back edge)
+    LOOP_EXIT = auto()       # Loop exit marker
 
 
 @dataclass
@@ -278,3 +317,50 @@ class IRModule:
             lines.append(str(func))
             lines.append("")
         return "\n".join(lines)
+
+
+@dataclass
+class IRLoop:
+    """
+    Represents a loop for vectorization analysis.
+    
+    Captures the structure of for-loops to enable SIMD transformation.
+    """
+    header: IRBasicBlock      # Loop header (condition check)
+    body: IRBasicBlock        # Loop body
+    latch: IRBasicBlock       # Back edge block
+    exit_block: IRBasicBlock  # Exit block
+    
+    # Loop induction variable
+    induction_var: Optional[IRValue] = None
+    start_value: Optional[IRValue] = None
+    end_value: Optional[IRValue] = None
+    step: int = 1
+    
+    # Vectorization info
+    is_vectorizable: bool = False
+    vector_width: int = 4      # Default AVX width
+    unroll_factor: int = 1
+    
+    # Loop invariants (values that don't change in loop)
+    invariants: List[IRValue] = field(default_factory=list)
+    
+    # Reduction variables (e.g., sum accumulator)
+    reductions: List[IRValue] = field(default_factory=list)
+    
+    def can_vectorize(self) -> bool:
+        """Check if this loop can be vectorized."""
+        # Must have known trip count
+        if self.start_value is None or self.end_value is None:
+            return False
+        # Step must be 1 for simple vectorization
+        if self.step != 1:
+            return False
+        return True
+    
+    def __str__(self) -> str:
+        return (
+            f"IRLoop(header={self.header.name}, body={self.body.name}, "
+            f"vectorizable={self.is_vectorizable}, width={self.vector_width})"
+        )
+

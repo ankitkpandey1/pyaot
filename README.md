@@ -111,6 +111,45 @@ def multiply(a: float, b: float) -> float:
 result = multiply(3.0, 4.0)  # Executes via native LLVM code
 ```
 
+### Loop Vectorization
+Automatic SIMD vectorization of numeric loops for 4-8× speedup:
+- Targets AVX2 (4×f64), AVX-512 (8×f64), and ARM NEON
+- Automatic loop analysis and dependency detection
+- Reduction pattern recognition (sum, max, min)
+
+### Multi-Function Compilation
+Compile entire call chains as a single optimized unit:
+- Call graph analysis identifies hot call chains
+- Inter-procedural optimization across function boundaries
+- Eliminates call overhead between chain functions
+
+### GPU Targeting
+CUDA backend for massively parallel workloads:
+- Element-wise and reduction kernels
+- NumPy-compatible `GPUArray` API
+- Automatic CPU↔GPU data transfer
+
+```python
+from pyaot.gpu.array import GPUArray
+import numpy as np
+
+# Transfer to GPU
+arr_gpu = GPUArray.from_numpy(np.random.randn(1000000))
+
+# Compute on GPU
+result = (arr_gpu * 2.0 + 1.0).sum()  # GPU-accelerated
+
+# Transfer back
+arr_cpu = arr_gpu.to_numpy()
+```
+
+### Production Hardening
+Enterprise-ready diagnostics and monitoring:
+- `pyaot dashboard`: Terminal-based profiling visualization
+- `pyaot diagnose`: Optimization suggestions for functions
+- `pyaot info`: System information and backend status
+- Rich error messages with actionable suggestions
+
 ### Artifact Caching
 Content-addressed persistent cache for compiled artifacts. Supports ABI validation, LRU eviction, and cross-session reuse.
 
