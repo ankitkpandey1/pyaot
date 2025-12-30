@@ -820,11 +820,20 @@ The CPython JIT provides broad, modest improvements. PyAOT provides deep, target
 
 ### Future Work
 
+The following modules are implemented but frozen for future development:
+
+| Module | Status | Description |
+|--------|--------|-------------|
+| `pyaot/gpu/` | Frozen | CUDA backend for GPU acceleration |
+| `pyaot/compiler/vectorizer.py` | Frozen | SIMD loop vectorization (AVX2/AVX-512/NEON) |
+| `pyaot/compiler/call_graph.py` | Frozen | Multi-function call graph analysis |
+| `pyaot/compiler/interprocedural.py` | Frozen | Inter-procedural optimization |
+| `pyaot/numpy/fusion.py` | Frozen | NumPy operation fusion |
+
+#### Potential Extensions
 1. **Multi-Dispatch**: Support multiple type variants per function
 2. **Incremental Compilation**: Re-compile as profiles evolve
-3. **GPU Targeting**: LLVM-based GPU code generation
-4. **Distributed Profiling**: Aggregate profiles across cluster
-5. **Integration with Type Hints**: Use PEP 484 annotations to guide compilation
+3. **Distributed Profiling**: Aggregate profiles across cluster
 
 ---
 
