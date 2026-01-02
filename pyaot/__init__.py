@@ -11,7 +11,7 @@ Core Design Principle:
 """
 
 __version__ = "0.1.0"
-__author__ = "PyAOT Contributors"
+__author__ = "Ankit Kumar Pandey"
 
 from pyaot.config import Config, get_config
 from pyaot.exceptions import (

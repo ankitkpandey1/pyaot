@@ -9,7 +9,7 @@ description = "Profile-Guided Ahead-of-Time Compilation for Python Hot Paths"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "PyAOT Contributors"}
+    {name = "Ankit Kumar Pandey"}
 ]
 keywords = [
     "aot",
