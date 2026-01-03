@@ -175,12 +175,13 @@ class TraceStore:
         record.header.checksum = record.compute_checksum()
 
         # Store
-        self._traces[signature_hash] = record
+        key = record.header.signature_hash
+        self._traces[key] = record
 
         return record
 
-    def get(self, signature: RequestSignature) -> Optional[TraceRecord]:
-        """Get trace by signature."""
+    def get(self, signature: RequestSignature) -> TraceRecord | None:
+        """Get the most representative trace for a signature."""
         signature_hash = hashlib.sha256(str(signature.to_tuple()).encode()).hexdigest()[
             :32
         ]

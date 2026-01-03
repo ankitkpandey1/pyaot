@@ -155,8 +155,8 @@ class TraceRecorder:
         store: Optional[TraceStore] = None,
         eligibility: Optional[EligibilityEvaluator] = None,
     ):
-        self.store = store or TraceStore()
-        self.eligibility = eligibility or EligibilityEvaluator()
+        self.store = store if store is not None else TraceStore()
+        self.eligibility = eligibility if eligibility is not None else EligibilityEvaluator()
         self._enabled = True
 
     def enable(self) -> None:
@@ -192,6 +192,9 @@ class TraceRecorder:
             client_ip=client_ip,
             active=True,
         )
+        
+        # Ensure trace is never empty
+        ctx.buffer.append(TraceOp(opcode=TraceOpcode.TRACE_START))
 
         set_current_context(ctx)
 
@@ -215,9 +218,6 @@ class TraceRecorder:
         if ctx.buffer.overflowed:
             return
 
-        if not ctx.buffer.is_valid():
-            return
-
         # Ensure trace ends properly
         if ctx.buffer.ops and ctx.buffer.ops[-1].opcode not in (
             TraceOpcode.RETURN,
@@ -225,6 +225,9 @@ class TraceRecorder:
             TraceOpcode.TRACE_END,
         ):
             ctx.buffer.append(TraceOp(opcode=TraceOpcode.TRACE_END))
+
+        if not ctx.buffer.is_valid():
+            return
 
         # Record observation for eligibility
         branch_fingerprint = ctx.buffer.get_branch_path_fingerprint()

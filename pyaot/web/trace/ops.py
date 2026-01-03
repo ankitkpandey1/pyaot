@@ -46,6 +46,7 @@ class TraceOpcode(Enum):
     RAISE = auto()  # exception_reg
     DEOPT = auto()  # deopt_id
     TRACE_END = auto()  # no operands
+    TRACE_START = auto()  # no operands
 
 
 class SideEffectKind(Enum):
@@ -63,7 +64,7 @@ class EscapeFlag(Enum):
     MAY_ESCAPE = auto()  # Must materialize
 
 
-@dataclass
+@dataclass(frozen=True)
 class TraceOp:
     """A single operation in a trace.
 

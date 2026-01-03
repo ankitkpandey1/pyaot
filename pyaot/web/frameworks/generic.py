@@ -71,6 +71,11 @@ class WSGIMiddleware:
 
     Works with any WSGI-compatible application (Flask, Django, Bottle,
     CherryPy, Falcon, etc.) without requiring framework-specific code.
+
+    Provides optimization via:
+    1. Response caching for idempotent GET requests
+    2. Pre-computed route matching
+    3. Trace-based profiling for optimization decisions
     """
 
     def __init__(
@@ -93,38 +98,101 @@ class WSGIMiddleware:
             store=self._store,
             eligibility=self._eligibility,
         )
-        self._compiler = TraceCompiler()
+
+        # Use HandlerOptimizer for actual optimization
+        from pyaot.web.codegen.optimizer import HandlerOptimizer
+        self._optimizer = HandlerOptimizer()
+
         self._metrics = get_metrics()
         self._enabled = True
+
+        # Optimized handler cache: signature -> optimized callable
+        self._compiled_traces: dict[RequestSignature, Any] = {}
+        self._pending_compilation: set[RequestSignature] = set()
 
     def __call__(
         self,
         environ: dict[str, Any],
         start_response: Callable,
     ) -> Iterator[bytes]:
-        """WSGI interface."""
+        """WSGI interface - trace, compile, and execute."""
         if not self._enabled:
             return self._app(environ, start_response)
 
-        # Extract request info from WSGI environ
+        # Extract request info
         method = environ.get("REQUEST_METHOD", "GET")
         path = environ.get("PATH_INFO", "/")
-
-        # Build signature
         signature = self._build_signature(environ)
         route_id = f"wsgi:{method}:{_extract_path_template(path)}"
         client_ip = self._get_client_ip(environ)
 
-        # Record trace
         start_time = time.perf_counter()
 
+        # Phase 1: Check for compiled trace
+        compiled = self._compiled_traces.get(signature)
+        if compiled is not None:
+            try:
+                # Execute compiled trace
+                result = compiled(environ, start_response)
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+                self._metrics.record_execution(route_id, elapsed_ms)
+                self._metrics.record_cache_hit(route_id)
+                return result
+            except Exception:
+                # Deopt: compiled trace failed, fall back to CPython
+                self._metrics.record_deopt(route_id)
+                # Remove from cache and re-record
+                del self._compiled_traces[signature]
+
+        # Phase 2: Record trace during CPython execution
+        self._metrics.record_cache_miss(route_id)
         with self._recorder.trace_request(route_id, signature, client_ip):
             result = self._app(environ, start_response)
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         self._metrics.record_execution(route_id, elapsed_ms)
 
+        # Phase 3: Check if eligible for compilation
+        self._try_compile(signature, route_id)
+
         return result
+
+    def _try_compile(self, signature: RequestSignature, route_id: str) -> None:
+        """Try to compile trace if eligible."""
+        # Skip if already compiled or pending
+        if signature in self._compiled_traces:
+            return
+        if signature in self._pending_compilation:
+            return
+
+        # Check eligibility
+        eligibility = self._eligibility.evaluate(signature)
+        if not eligibility.eligible:
+            return
+
+        # Get trace from store
+        trace = self._store.get(signature)
+        if not trace:
+            return
+            
+        # Mark as pending
+        self._pending_compilation.add(signature)
+
+        try:
+            # Compile handler using optimizer
+            compile_start = time.perf_counter()
+            optimized = self._optimizer.optimize(signature, self._app)
+            compile_ms = (time.perf_counter() - compile_start) * 1000
+
+            # Store optimized handler
+            if optimized:
+                self._compiled_traces[signature] = optimized
+                self._metrics.record_compilation(route_id, compile_ms)
+        except Exception:
+            # Compilation failed - will retry later
+            pass
+        finally:
+            self._pending_compilation.discard(signature)
 
     def _build_signature(self, environ: dict[str, Any]) -> RequestSignature:
         """Build RequestSignature from WSGI environ."""

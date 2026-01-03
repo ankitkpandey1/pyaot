@@ -113,7 +113,8 @@ class EligibilityEvaluator:
         if signature not in self._records:
             self._records[signature] = ObservationRecord(signature=signature)
 
-        self._records[signature].record_observation(
+        record = self._records[signature]
+        record.record_observation(
             client_ip=client_ip,
             branch_fingerprint=branch_fingerprint,
             shape_id=shape_id,
@@ -123,11 +124,11 @@ class EligibilityEvaluator:
         """Evaluate if a signature is eligible for compilation."""
         # Guard: blacklisted
         if signature in self._blacklisted:
-            return EligibilityResult(eligible=False, reason="blacklisted")
+            return EligibilityResult(False, "blacklisted")
 
         # Guard: no observations
         if signature not in self._records:
-            return EligibilityResult(eligible=False, reason="no observations")
+            return EligibilityResult(False, "no observations")
 
         record = self._records[signature]
         return self._check_eligibility(record)
