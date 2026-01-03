@@ -195,22 +195,29 @@ class WSGIMiddleware:
             self._pending_compilation.discard(signature)
 
     def _build_signature(self, environ: dict[str, Any]) -> RequestSignature:
-        """Build RequestSignature from WSGI environ."""
+        """Build RequestSignature from WSGI environ (Optimized)."""
         method = environ.get("REQUEST_METHOD", "GET")
         path = environ.get("PATH_INFO", "/")
         path_template = _extract_path_template(path)
 
-        # Extract headers (WSGI uses HTTP_ prefix)
-        headers = {}
-        for key, value in environ.items():
+        # Optimize: Extract header keys directly for shape hash
+        # Avoid creating full headers dict
+        header_keys = []
+        has_auth = False
+        
+        for key in environ:
             if key.startswith("HTTP_"):
-                header_name = key[5:].replace("_", "-").title()
-                headers[header_name] = value
+                # Transform HTTP_USER_AGENT -> User-Agent
+                header_keys.append(key[5:].replace("_", "-").title())
+                if key == "HTTP_AUTHORIZATION":
+                    has_auth = True
             elif key in ("CONTENT_TYPE", "CONTENT_LENGTH"):
-                headers[key.replace("_", "-").title()] = value
+                header_keys.append(key.replace("_", "-").title())
 
-        # Auth state
-        auth_state = "authenticated" if headers.get("Authorization") else "anonymous"
+        header_keys.sort()
+        header_shape_hash = hashlib.md5("|".join(header_keys).encode()).hexdigest()[:16]
+
+        auth_state = "authenticated" if has_auth else "anonymous"
 
         # Parse query params for types
         query = environ.get("QUERY_STRING", "")
@@ -226,7 +233,7 @@ class WSGIMiddleware:
             path_template=path_template,
             auth_state=auth_state,
             param_types=tuple(sorted((k, type(v).__name__) for k, v in params.items())),
-            header_shape_hash=_compute_header_shape(headers),
+            header_shape_hash=header_shape_hash,
             body_shape_hash="",  # Would need to read body
         )
 

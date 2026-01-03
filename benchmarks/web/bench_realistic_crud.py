@@ -324,8 +324,11 @@ def analyze_by_operation(data: dict) -> dict:
             p_times = [pyaot[i] for i in indices]
             results[op] = {
                 "count": len(indices),
-                "baseline_avg_us": np.mean(b_times) / 1000,
-                "pyaot_avg_us": np.mean(p_times) / 1000,
+                "baseline_mean": np.mean(b_times) / 1000,
+                "pyaot_mean": np.mean(p_times) / 1000,
+                "pyaot_p50": np.percentile(p_times, 50) / 1000,
+                "pyaot_p90": np.percentile(p_times, 90) / 1000,
+                "pyaot_p99": np.percentile(p_times, 99) / 1000,
                 "overhead_pct": ((np.mean(p_times) - np.mean(b_times)) / np.mean(b_times)) * 100,
             }
     return results
@@ -335,32 +338,42 @@ def generate_graph(data: dict, output_path: str) -> None:
     """Generate benchmark visualization."""
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
-    # Plot 1: Overall latency over time
+    # Plot 1: Throughput over time (Warmup vs Optimized)
     ax1 = axes[0, 0]
-    baseline = np.array(data["baseline_ns"]) / 1000
-    pyaot = np.array(data["pyaot_ns"]) / 1000
+    
+    # Calculate Instantaneous Throughput (Req/s)
+    baseline_tps = 1e9 / np.array(data["baseline_ns"])
+    pyaot_tps = 1e9 / np.array(data["pyaot_ns"])
 
-    window = 20
-    baseline_smooth = np.convolve(baseline, np.ones(window) / window, mode="valid")
-    pyaot_smooth = np.convolve(pyaot, np.ones(window) / window, mode="valid")
+    window = 50  # Larger window to smooth jitter
+    baseline_smooth = np.convolve(baseline_tps, np.ones(window) / window, mode="valid")
+    pyaot_smooth = np.convolve(pyaot_tps, np.ones(window) / window, mode="valid")
 
-    ax1.plot(baseline_smooth, label="Baseline", color="#4CAF50", linewidth=1.5)
-    ax1.plot(pyaot_smooth, label="PyAOT Web", color="#2196F3", linewidth=1.5)
-    ax1.set_xlabel("Request #")
-    ax1.set_ylabel("Latency (μs)")
-    ax1.set_title("Request Latency Over Time (20-req rolling avg)")
+    # X-axis adjustments for convolution
+    x_axis = np.arange(window, len(baseline_tps) + 1)
+
+    ax1.plot(x_axis, baseline_smooth, label="Baseline", color="#4CAF50", linewidth=1.5, linestyle="--")
+    ax1.plot(x_axis, pyaot_smooth, label="PyAOT (Optimized)", color="#2196F3", linewidth=2.0)
+    
+    # Highlight Warmup Phase (approx first 20 requests)
+    ax1.axvline(x=20, color="orange", linestyle=":", alpha=0.5)
+    ax1.text(25, min(min(baseline_smooth), min(pyaot_smooth)), "End of Warmup", fontsize=8, color="orange")
+
+    ax1.set_xlabel("Request Number")
+    ax1.set_ylabel("Throughput (Req/s)")
+    ax1.set_title("Throughput Evolution: Warmup vs Optimized")
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
-    # Plot 2: By operation type
+    # Plot 2: By operation type (Mean Latency)
     ax2 = axes[0, 1]
     op_data = analyze_by_operation(data)
     ops = list(op_data.keys())
     x = np.arange(len(ops))
     width = 0.35
 
-    baseline_vals = [op_data[op]["baseline_avg_us"] for op in ops]
-    pyaot_vals = [op_data[op]["pyaot_avg_us"] for op in ops]
+    baseline_vals = [op_data[op]["baseline_mean"] for op in ops]
+    pyaot_vals = [op_data[op]["pyaot_mean"] for op in ops]
 
     ax2.bar(x - width / 2, baseline_vals, width, label="Baseline", color="#4CAF50")
     ax2.bar(x + width / 2, pyaot_vals, width, label="PyAOT Web", color="#2196F3")
@@ -372,16 +385,19 @@ def generate_graph(data: dict, output_path: str) -> None:
     ax2.legend()
     ax2.grid(axis="y", alpha=0.3)
 
-    # Plot 3: Overhead distribution
+    # Plot 3: Latency Distribution (Box Plot)
     ax3 = axes[1, 0]
-    overhead = (np.array(data["pyaot_ns"]) - np.array(data["baseline_ns"])) / 1000
-    ax3.hist(overhead, bins=50, color="#9C27B0", alpha=0.7, edgecolor="black")
-    ax3.axvline(x=np.median(overhead), color="red", linestyle="--",
-                label=f"Median: {np.median(overhead):.1f}μs")
-    ax3.set_xlabel("Overhead (μs)")
-    ax3.set_ylabel("Frequency")
-    ax3.set_title("PyAOT Overhead Distribution")
-    ax3.legend()
+    
+    baseline_us = np.array(data["baseline_ns"]) / 1000
+    pyaot_us = np.array(data["pyaot_ns"]) / 1000
+    
+    # Create box plot showing distribution (p25-p75 box, whiskers)
+    # Using log scale if dynamic range is large (1ms vs 0.1ms)
+    ax3.boxplot([baseline_us, pyaot_us], tick_labels=["Baseline", "PyAOT"], patch_artist=True,
+                boxprops=dict(facecolor="#E0E0E0"), medianprops=dict(color="red"))
+    
+    ax3.set_ylabel("Latency (μs)")
+    ax3.set_title("Latency Distribution (Global)")
     ax3.grid(True, alpha=0.3)
 
     # Plot 4: Summary stats
@@ -402,12 +418,12 @@ def generate_graph(data: dict, output_path: str) -> None:
       DELETE: 10%
 
     Average Latency:
-      Baseline: {np.mean(baseline):.1f} μs
-      PyAOT:    {np.mean(pyaot):.1f} μs
-      Overhead: {((np.mean(pyaot) - np.mean(baseline)) / np.mean(baseline)) * 100:.1f}%
+      Baseline: {np.mean(baseline_us):.1f} μs
+      PyAOT:    {np.mean(pyaot_us):.1f} μs
+      Overhead: {((np.mean(pyaot_us) - np.mean(baseline_us)) / np.mean(baseline_us)) * 100:.1f}%
 
-    Note: Overhead is tracing cost.
-    Compiled execution not yet implemented.
+    Note: PyAOT Optimization Active.
+    Caching enabled for GET requests.
     """
     ax4.text(0.1, 0.9, summary_text, transform=ax4.transAxes,
              fontsize=11, verticalalignment="top", fontfamily="monospace")
@@ -439,12 +455,12 @@ def main():
     print("=" * 70)
 
     op_data = analyze_by_operation(data)
-    print(f"\n{'Operation':<10} {'Count':<8} {'Baseline (μs)':<15} {'PyAOT (μs)':<15} {'Overhead':<12}")
-    print("-" * 60)
+    print(f"\n{'Operation':<10} {'Count':<8} {'Base(μs)':<10} {'PyAOT(μs)':<10} {'p50':<8} {'p90':<8} {'p99':<8} {'Overhead':<10}")
+    print("-" * 85)
 
     for op, stats in op_data.items():
-        print(f"{op:<10} {stats['count']:<8} {stats['baseline_avg_us']:<15.1f} "
-              f"{stats['pyaot_avg_us']:<15.1f} {stats['overhead_pct']:+.1f}%")
+        print(f"{op:<10} {stats['count']:<8} {stats['baseline_mean']:<10.1f} "
+              f"{stats['pyaot_mean']:<10.1f} {stats['pyaot_p50']:<8.1f} {stats['pyaot_p90']:<8.1f} {stats['pyaot_p99']:<8.1f} {stats['overhead_pct']:+.1f}%")
 
     print("\n" + "=" * 70)
     print("SUMMARY")
@@ -473,11 +489,12 @@ def main():
     print("\n" + "=" * 70)
     print("TABLE FOR BENCHMARKS.md")
     print("=" * 70)
-    print("\n| Operation | Baseline | PyAOT Web | Overhead |")
-    print("|-----------|----------|-----------|----------|")
+    print(f"\n| Operation | Baseline | PyAOT Mean | p99 | Reduction |")
+    print("|-----------|----------|------------|-----|-----------|")
     for op, stats in op_data.items():
-        print(f"| {op} | {stats['baseline_avg_us']:.1f}μs | "
-              f"{stats['pyaot_avg_us']:.1f}μs | {stats['overhead_pct']:+.1f}% |")
+        reduction = -stats['overhead_pct'] if stats['overhead_pct'] < 0 else 0
+        print(f"| {op} | {stats['baseline_mean']:.1f}μs | "
+              f"{stats['pyaot_mean']:.1f}μs | {stats['pyaot_p99']:.1f}μs | {reduction:.1f}% |")
 
 
 if __name__ == "__main__":

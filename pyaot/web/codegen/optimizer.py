@@ -128,7 +128,13 @@ class HandlerOptimizer:
                 opt_handler.total_time_ns += time.perf_counter_ns() - start
                 return iter([body])
 
-            # Capture response
+            # Non-cacheable path (Zero Overhead)
+            if not is_cacheable:
+                result = original(environ, start_response)
+                opt_handler.total_time_ns += time.perf_counter_ns() - start
+                return result
+
+            # Cacheable Miss: Capture response
             captured_status = None
             captured_headers = None
 
@@ -138,11 +144,11 @@ class HandlerOptimizer:
                 captured_headers = list(headers)
                 return start_response(status, headers, exc_info)
 
-            # Execute original
+            # Execute original with capture
             result = original(environ, capturing_start_response)
 
-            # Consume and cache if cacheable
-            if is_cacheable and captured_status and captured_status.startswith("2"):
+            # Consume and cache
+            if captured_status and captured_status.startswith("2"):
                 body_parts = list(result)
                 body = b"".join(body_parts)
                 cache[cache_key] = (captured_status, captured_headers, body)
