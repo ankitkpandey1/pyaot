@@ -59,16 +59,51 @@ class GuardGenerator:
         self,
         builder: "llvm_ir.IRBuilder",
         deopt_targets: dict[int, Any],
+        hot_path_weight: int = 1000,
     ) -> None:
         """Initialize guard generator.
 
         Args:
             builder: LLVM IR builder.
             deopt_targets: Map of deopt_id to deopt block.
+            hot_path_weight: Weight for the hot (passing) path.
         """
         self._builder = builder
         self._deopt_targets = deopt_targets
+        self._hot_path_weight = max(1, hot_path_weight)
+        self._cold_path_weight = 1  # Deopt is rare
         self._generated_guards: list[GuardInfo] = []
+
+    def _set_branch_weights(self, br_inst: Any) -> None:
+        """Attach branch probability metadata to branch instruction."""
+        try:
+            from llvmlite import ir as llvm_ir
+            
+            # Create "branch_weights" metadata
+            # !{!"branch_weights", i32 <true_weight>, i32 <false_weight>}
+            # Note: For cbranch(cond, true_blk, false_blk), operands are weights for True/False
+            
+            # Since our guards are structured as:
+            # cbranch(cond, pass_block, fail_block)
+            # pass_block is True logic (if cond is true).
+            # So True weight = hot, False weight = cold.
+            
+            # Metadata construction in llvmlite is low-level
+            module = self._builder.module
+            ctx = module.context
+            
+            # Create metadata nodes
+            name_node = module.add_metadata([llvm_ir.MetaDataString("branch_weights")])
+            true_weight = llvm_ir.Constant(llvm_ir.IntType(32), self._hot_path_weight)
+            false_weight = llvm_ir.Constant(llvm_ir.IntType(32), self._cold_path_weight)
+            
+            metadata_node = module.add_metadata([name_node, true_weight, false_weight])
+            
+            # Attach to instruction ("prof" = 28 in some LLVM, but key is "prof")
+            br_inst.set_metadata("prof", metadata_node)
+        except Exception:
+            # Metadata attachment is optional optimization, do not crash
+            pass
 
     def generate_type_guard(
         self,
@@ -106,7 +141,8 @@ class GuardGenerator:
         # For now, always pass (will be replaced with actual type check)
         cond = self._const_i1(True)
 
-        self._builder.cbranch(cond, pass_block, fail_block)
+        br = self._builder.cbranch(cond, pass_block, fail_block)
+        self._set_branch_weights(br)
         self._builder.position_at_end(pass_block)
 
         info = GuardInfo(
@@ -144,7 +180,8 @@ class GuardGenerator:
         # Placeholder: would load and hash __dict__ keys
         cond = self._const_i1(True)
 
-        self._builder.cbranch(cond, pass_block, fail_block)
+        br = self._builder.cbranch(cond, pass_block, fail_block)
+        self._set_branch_weights(br)
         self._builder.position_at_end(pass_block)
 
         info = GuardInfo(
@@ -183,7 +220,8 @@ class GuardGenerator:
         null_ptr = llvm_ir.Constant(value_ptr.type, None)
         cond = self._builder.icmp_unsigned("!=", value_ptr, null_ptr)
 
-        self._builder.cbranch(cond, pass_block, fail_block)
+        br = self._builder.cbranch(cond, pass_block, fail_block)
+        self._set_branch_weights(br)
         self._builder.position_at_end(pass_block)
 
         info = GuardInfo(
@@ -221,7 +259,8 @@ class GuardGenerator:
         expected_val = self._const_i1(expected)
         cond = self._builder.icmp_unsigned("==", condition, expected_val)
 
-        self._builder.cbranch(cond, pass_block, fail_block)
+        br = self._builder.cbranch(cond, pass_block, fail_block)
+        self._set_branch_weights(br)
         self._builder.position_at_end(pass_block)
 
         info = GuardInfo(
@@ -259,7 +298,8 @@ class GuardGenerator:
         # Placeholder: would hash function code and compare
         cond = self._const_i1(True)
 
-        self._builder.cbranch(cond, pass_block, fail_block)
+        br = self._builder.cbranch(cond, pass_block, fail_block)
+        self._set_branch_weights(br)
         self._builder.position_at_end(pass_block)
 
         info = GuardInfo(
@@ -293,7 +333,8 @@ class GuardGenerator:
         # Placeholder: would call PyErr_Occurred and check
         cond = self._const_i1(True)
 
-        self._builder.cbranch(cond, pass_block, fail_block)
+        br = self._builder.cbranch(cond, pass_block, fail_block)
+        self._set_branch_weights(br)
         self._builder.position_at_end(pass_block)
 
         info = GuardInfo(

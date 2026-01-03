@@ -81,7 +81,11 @@ class TraceLowerer:
 
         # Initialize context
         deopt_targets: dict[int, Any] = {}
-        guard_gen = GuardGenerator(builder, deopt_targets)
+        guard_gen = GuardGenerator(
+            builder, 
+            deopt_targets, 
+            hot_path_weight=trace.header.observation_count
+        )
         deopt_mat = DeoptMaterializer(module)
 
         self._ctx = LoweringContext(
