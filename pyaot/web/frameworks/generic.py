@@ -32,6 +32,7 @@ from pyaot.web.route.trie import RouteLearner
 if TYPE_CHECKING:
     pass
 
+
 # Legacy function removed/deprecated
 def _extract_path_template(path: str) -> str:
     """DEPRECATED: Use RouteLearner.extract_and_learn."""
@@ -91,6 +92,7 @@ class WSGIMiddleware:
 
         # Use HandlerOptimizer for actual optimization
         from pyaot.web.codegen.optimizer import HandlerOptimizer
+
         self._optimizer = HandlerOptimizer()
 
         self._metrics = get_metrics()
@@ -99,7 +101,11 @@ class WSGIMiddleware:
         # Optimized handler cache: signature -> optimized callable
         self._compiled_traces: dict[RequestSignature, Any] = {}
         self._pending_compilation: set[RequestSignature] = set()
-        
+
+        # Fast-path cache: (method, path_template) -> compiled handler
+        # Avoids signature creation overhead for hot paths
+        self._fast_cache: dict[tuple[str, str], Any] = {}
+
         # Route learning and pooling
         self._router = RouteLearner()
         self._sig_pool = ObjectPool(
@@ -115,33 +121,36 @@ class WSGIMiddleware:
         if not self._enabled:
             return self._app(environ, start_response)
 
-        # Extract request info
+        # Fast path: Check if we have a compiled handler for this route
         method = environ.get("REQUEST_METHOD", "GET")
         path = environ.get("PATH_INFO", "/")
+
+        # Try fast cache first (avoids signature creation)
+        fast_key = (method, path)
+        compiled = self._fast_cache.get(fast_key)
+        if compiled is not None:
+            return compiled(environ, start_response)
+
+        # Slow path: Need to create signature and potentially compile
         path_template = self._router.extract_and_learn(path)
         signature = self._get_signature(environ, path_template)
         route_id = f"wsgi:{method}:{path_template}"
         client_ip = self._get_client_ip(environ)
 
-        start_time = time.perf_counter()
-
-        # Phase 1: Check for compiled trace
+        # Check compiled traces
         compiled = self._compiled_traces.get(signature)
         if compiled is not None:
-             # Execute compiled trace (native code wrapper)
-             # Return signature to pool (steady state)
-             self._sig_pool.put(signature)
-             return compiled(environ, start_response)
+            # Cache for fast path next time
+            self._fast_cache[fast_key] = compiled
+            self._sig_pool.put(signature)
+            return compiled(environ, start_response)
 
-        # Phase 2: Record trace during CPython execution
+        # Record trace during CPython execution
         self._metrics.record_cache_miss(route_id)
         with self._recorder.trace_request(route_id, signature, client_ip):
             result = self._app(environ, start_response)
 
-        elapsed_ms = (time.perf_counter() - start_time) * 1000
-        self._metrics.record_execution(route_id, elapsed_ms)
-
-        # Phase 3: Check if eligible for compilation
+        # Check if eligible for compilation
         self._try_compile(signature, route_id)
 
         return result
@@ -163,7 +172,7 @@ class WSGIMiddleware:
         trace = self._store.get(signature)
         if not trace:
             return
-            
+
         # Mark as pending
         self._pending_compilation.add(signature)
 
@@ -183,16 +192,18 @@ class WSGIMiddleware:
         finally:
             self._pending_compilation.discard(signature)
 
-    def _get_signature(self, environ: dict[str, Any], path_template: str) -> RequestSignature:
+    def _get_signature(
+        self, environ: dict[str, Any], path_template: str
+    ) -> RequestSignature:
         """Get RequestSignature from pool and update."""
         sig = self._sig_pool.get()
-        
+
         method = environ.get("REQUEST_METHOD", "GET")
-        
+
         # Optimize: Extract header keys directly for shape hash
         header_keys = []
         has_auth = False
-        
+
         for key in environ:
             if key.startswith("HTTP_"):
                 header_keys.append(key[5:].replace("_", "-").title())
@@ -213,7 +224,7 @@ class WSGIMiddleware:
                 if "=" in part:
                     k, v = part.split("=", 1)
                     params[k] = v
-        
+
         param_types = tuple(sorted((k, type(v).__name__) for k, v in params.items()))
 
         # Update in-place
@@ -223,7 +234,7 @@ class WSGIMiddleware:
         sig.param_types = param_types
         sig.header_shape_hash = header_shape_hash
         sig.body_shape_hash = ""
-        
+
         return sig
 
     def _get_client_ip(self, environ: dict[str, Any]) -> str:
@@ -302,7 +313,7 @@ class ASGIMiddleware:
 
         # Record trace
         start_time = time.perf_counter()
-        
+
         # Note: For ASGI we can't easily pool/return because trace usage is async/complex?
         # Or we can check compiled traces here too (Milestone 1+2 didn't implement compilation for ASGI?)
         # Wait, generic.py ASGIMiddleware HAS NO COMPILATION CHECK!
@@ -320,10 +331,12 @@ class ASGIMiddleware:
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         self._metrics.record_execution(route_id, elapsed_ms)
 
-    def _get_signature(self, scope: dict[str, Any], path_template: str) -> RequestSignature:
+    def _get_signature(
+        self, scope: dict[str, Any], path_template: str
+    ) -> RequestSignature:
         """Get RequestSignature from pool and update."""
         sig = self._sig_pool.get()
-        
+
         method = scope.get("method", "GET")
         # path_template passed in
 
@@ -350,10 +363,12 @@ class ASGIMiddleware:
         sig.http_method = method.upper()
         sig.path_template = path_template
         sig.auth_state = auth_state
-        sig.param_types = tuple(sorted((k, type(v).__name__) for k, v in params.items()))
+        sig.param_types = tuple(
+            sorted((k, type(v).__name__) for k, v in params.items())
+        )
         sig.header_shape_hash = header_shape_hash
         sig.body_shape_hash = ""
-        
+
         return sig
 
     def _get_client_ip(self, scope: dict[str, Any]) -> str:

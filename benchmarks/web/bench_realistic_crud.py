@@ -34,6 +34,7 @@ from pyaot.web.ops.metrics import reset_metrics, get_metrics
 @dataclass
 class User:
     """User model."""
+
     id: int
     name: str
     email: str
@@ -50,7 +51,8 @@ class Database:
         self._seed_data()
 
     def _create_tables(self):
-        self.conn.execute("""
+        self.conn.execute(
+            """
             CREATE TABLE users (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -58,7 +60,8 @@ class Database:
                 password_hash TEXT NOT NULL,
                 created_at TEXT NOT NULL
             )
-        """)
+        """
+        )
         self.conn.commit()
 
     def _seed_data(self):
@@ -66,9 +69,12 @@ class Database:
         for i in range(100):
             self.conn.execute(
                 "INSERT INTO users (name, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
-                (f"User {i}", f"user{i}@example.com",
-                 hashlib.sha256(f"password{i}".encode()).hexdigest(),
-                 "2024-01-01T00:00:00Z")
+                (
+                    f"User {i}",
+                    f"user{i}@example.com",
+                    hashlib.sha256(f"password{i}".encode()).hexdigest(),
+                    "2024-01-01T00:00:00Z",
+                ),
             )
         self.conn.commit()
 
@@ -76,13 +82,16 @@ class Database:
         """Get user by ID."""
         cursor = self.conn.execute(
             "SELECT id, name, email, password_hash, created_at FROM users WHERE id = ?",
-            (user_id,)
+            (user_id,),
         )
         row = cursor.fetchone()
         if row:
             return {
-                "id": row[0], "name": row[1], "email": row[2],
-                "password_hash": row[3], "created_at": row[4]
+                "id": row[0],
+                "name": row[1],
+                "email": row[2],
+                "password_hash": row[3],
+                "created_at": row[4],
             }
         return None
 
@@ -91,17 +100,14 @@ class Database:
         password_hash = hashlib.sha256(password.encode()).hexdigest()
         cursor = self.conn.execute(
             "INSERT INTO users (name, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
-            (name, email, password_hash, "2024-01-01T00:00:00Z")
+            (name, email, password_hash, "2024-01-01T00:00:00Z"),
         )
         self.conn.commit()
         return {"id": cursor.lastrowid, "name": name, "email": email}
 
     def update_user(self, user_id: int, name: str) -> dict | None:
         """Update user name."""
-        self.conn.execute(
-            "UPDATE users SET name = ? WHERE id = ?",
-            (name, user_id)
-        )
+        self.conn.execute("UPDATE users SET name = ? WHERE id = ?", (name, user_id))
         self.conn.commit()
         return self.get_user(user_id)
 
@@ -153,16 +159,22 @@ def create_crud_app(db: Database) -> Callable:
                     start_response("200 OK", [("Content-Type", "application/json")])
                 else:
                     body = json.dumps({"error": "not found"}).encode()
-                    start_response("404 Not Found", [("Content-Type", "application/json")])
+                    start_response(
+                        "404 Not Found", [("Content-Type", "application/json")]
+                    )
             except ValueError:
                 body = json.dumps({"error": "invalid id"}).encode()
-                start_response("400 Bad Request", [("Content-Type", "application/json")])
+                start_response(
+                    "400 Bad Request", [("Content-Type", "application/json")]
+                )
             return iter([body])
 
         # Route: POST /users - create user
         if path == "/users" and method == "POST":
             # Simulate reading request body
-            user = db.create_user("New User", f"new{time.time_ns()}@example.com", "password123")
+            user = db.create_user(
+                "New User", f"new{time.time_ns()}@example.com", "password123"
+            )
             body = json.dumps(user).encode()
             start_response("201 Created", [("Content-Type", "application/json")])
             return iter([body])
@@ -178,10 +190,14 @@ def create_crud_app(db: Database) -> Callable:
                     start_response("200 OK", [("Content-Type", "application/json")])
                 else:
                     body = json.dumps({"error": "not found"}).encode()
-                    start_response("404 Not Found", [("Content-Type", "application/json")])
+                    start_response(
+                        "404 Not Found", [("Content-Type", "application/json")]
+                    )
             except ValueError:
                 body = json.dumps({"error": "invalid id"}).encode()
-                start_response("400 Bad Request", [("Content-Type", "application/json")])
+                start_response(
+                    "400 Bad Request", [("Content-Type", "application/json")]
+                )
             return iter([body])
 
         # Route: DELETE /users/{id} - delete user
@@ -193,10 +209,14 @@ def create_crud_app(db: Database) -> Callable:
                     start_response("204 No Content", [])
                 else:
                     body = json.dumps({"error": "not found"}).encode()
-                    start_response("404 Not Found", [("Content-Type", "application/json")])
+                    start_response(
+                        "404 Not Found", [("Content-Type", "application/json")]
+                    )
             except ValueError:
                 body = json.dumps({"error": "invalid id"}).encode()
-                start_response("400 Bad Request", [("Content-Type", "application/json")])
+                start_response(
+                    "400 Bad Request", [("Content-Type", "application/json")]
+                )
             return iter([body])
 
         # Default: 404
@@ -213,9 +233,7 @@ def create_crud_app(db: Database) -> Callable:
 
 
 def make_environ(
-    method: str = "GET",
-    path: str = "/users",
-    client_ip: str = "192.168.1.1"
+    method: str = "GET", path: str = "/users", client_ip: str = "192.168.1.1"
 ) -> dict[str, Any]:
     """Create WSGI environ."""
     return {
@@ -268,6 +286,27 @@ def run_realistic_benchmark(n_iterations: int = 500) -> dict:
     # Use diverse IPs to satisfy poisoning protection (needs distinct /16 prefixes)
     client_ips = [f"10.{i}.{j}.1" for i in range(5) for j in range(5)]
 
+    # WARMUP PHASE: Run enough requests to trigger compilation
+    # This is not counted in the benchmark results
+    print("  Warming up (triggering compilation)...")
+    warmup_count = 200
+    for i in range(warmup_count):
+        client_ip = client_ips[i % len(client_ips)]
+        op = i % 20
+        if op < 12:
+            environ = make_environ("GET", f"/users/{(i % 100) + 1}", client_ip)
+        elif op < 15:
+            environ = make_environ("POST", "/users", client_ip)
+        elif op < 18:
+            environ = make_environ("PUT", f"/users/{(i % 100) + 1}", client_ip)
+        else:
+            environ = make_environ("DELETE", f"/users/{500 + i}", client_ip)
+        consume(pyaot_app(environ, mock_start_response))
+
+    print(f"  Warmup complete. Compiled traces: {len(pyaot_app._compiled_traces)}")
+    print(f"  Fast cache entries: {len(pyaot_app._fast_cache)}")
+
+    # MEASUREMENT PHASE: Steady-state performance
     for i in range(n_iterations):
         client_ip = client_ips[i % len(client_ips)]
         op = i % 20
@@ -297,8 +336,8 @@ def run_realistic_benchmark(n_iterations: int = 500) -> dict:
         consume(pyaot_app(environ, mock_start_response))
         pyaot_times.append(time.perf_counter_ns() - start)
 
-        if (i + 1) % 50 == 0:
-            print(f"  Progress: {i + 1}/{n_iterations} requests (Compiled: {len(pyaot_app._compiled_traces)})")
+        if (i + 1) % 200 == 0:
+            print(f"  Progress: {i + 1}/{n_iterations} requests")
 
     return {
         "baseline_ns": baseline_times,
@@ -306,7 +345,6 @@ def run_realistic_benchmark(n_iterations: int = 500) -> dict:
         "operations": operations,
         "n_iterations": n_iterations,
         "compiled_traces": len(pyaot_app._compiled_traces),
-        # "metrics": get_metrics().get_summary(),  # Avoiding lock contention
     }
 
 
@@ -329,7 +367,10 @@ def analyze_by_operation(data: dict) -> dict:
                 "pyaot_p50": np.percentile(p_times, 50) / 1000,
                 "pyaot_p90": np.percentile(p_times, 90) / 1000,
                 "pyaot_p99": np.percentile(p_times, 99) / 1000,
-                "overhead_pct": ((np.mean(p_times) - np.mean(b_times)) / np.mean(b_times)) * 100,
+                "overhead_pct": (
+                    (np.mean(p_times) - np.mean(b_times)) / np.mean(b_times)
+                )
+                * 100,
             }
     return results
 
@@ -340,7 +381,7 @@ def generate_graph(data: dict, output_path: str) -> None:
 
     # Plot 1: Throughput over time (Warmup vs Optimized)
     ax1 = axes[0, 0]
-    
+
     # Calculate Instantaneous Throughput (Req/s)
     baseline_tps = 1e9 / np.array(data["baseline_ns"])
     pyaot_tps = 1e9 / np.array(data["pyaot_ns"])
@@ -352,12 +393,27 @@ def generate_graph(data: dict, output_path: str) -> None:
     # X-axis adjustments for convolution
     x_axis = np.arange(window, len(baseline_tps) + 1)
 
-    ax1.plot(x_axis, baseline_smooth, label="Baseline", color="#4CAF50", linewidth=1.5, linestyle="--")
-    ax1.plot(x_axis, pyaot_smooth, label="PyAOT (Optimized)", color="#2196F3", linewidth=2.0)
-    
+    ax1.plot(
+        x_axis,
+        baseline_smooth,
+        label="Baseline",
+        color="#4CAF50",
+        linewidth=1.5,
+        linestyle="--",
+    )
+    ax1.plot(
+        x_axis, pyaot_smooth, label="PyAOT (Optimized)", color="#2196F3", linewidth=2.0
+    )
+
     # Highlight Warmup Phase (approx first 20 requests)
     ax1.axvline(x=20, color="orange", linestyle=":", alpha=0.5)
-    ax1.text(25, min(min(baseline_smooth), min(pyaot_smooth)), "End of Warmup", fontsize=8, color="orange")
+    ax1.text(
+        25,
+        min(min(baseline_smooth), min(pyaot_smooth)),
+        "End of Warmup",
+        fontsize=8,
+        color="orange",
+    )
 
     ax1.set_xlabel("Request Number")
     ax1.set_ylabel("Throughput (Req/s)")
@@ -387,15 +443,20 @@ def generate_graph(data: dict, output_path: str) -> None:
 
     # Plot 3: Latency Distribution (Box Plot)
     ax3 = axes[1, 0]
-    
+
     baseline_us = np.array(data["baseline_ns"]) / 1000
     pyaot_us = np.array(data["pyaot_ns"]) / 1000
-    
+
     # Create box plot showing distribution (p25-p75 box, whiskers)
     # Using log scale if dynamic range is large (1ms vs 0.1ms)
-    ax3.boxplot([baseline_us, pyaot_us], tick_labels=["Baseline", "PyAOT"], patch_artist=True,
-                boxprops=dict(facecolor="#E0E0E0"), medianprops=dict(color="red"))
-    
+    ax3.boxplot(
+        [baseline_us, pyaot_us],
+        tick_labels=["Baseline", "PyAOT"],
+        patch_artist=True,
+        boxprops=dict(facecolor="#E0E0E0"),
+        medianprops=dict(color="red"),
+    )
+
     ax3.set_ylabel("Latency (μs)")
     ax3.set_title("Latency Distribution (Global)")
     ax3.grid(True, alpha=0.3)
@@ -425,8 +486,15 @@ def generate_graph(data: dict, output_path: str) -> None:
     Note: PyAOT Optimization Active.
     Caching enabled for GET requests.
     """
-    ax4.text(0.1, 0.9, summary_text, transform=ax4.transAxes,
-             fontsize=11, verticalalignment="top", fontfamily="monospace")
+    ax4.text(
+        0.1,
+        0.9,
+        summary_text,
+        transform=ax4.transAxes,
+        fontsize=11,
+        verticalalignment="top",
+        fontfamily="monospace",
+    )
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -455,12 +523,16 @@ def main():
     print("=" * 70)
 
     op_data = analyze_by_operation(data)
-    print(f"\n{'Operation':<10} {'Count':<8} {'Base(μs)':<10} {'PyAOT(μs)':<10} {'p50':<8} {'p90':<8} {'p99':<8} {'Overhead':<10}")
+    print(
+        f"\n{'Operation':<10} {'Count':<8} {'Base(μs)':<10} {'PyAOT(μs)':<10} {'p50':<8} {'p90':<8} {'p99':<8} {'Overhead':<10}"
+    )
     print("-" * 85)
 
     for op, stats in op_data.items():
-        print(f"{op:<10} {stats['count']:<8} {stats['baseline_mean']:<10.1f} "
-              f"{stats['pyaot_mean']:<10.1f} {stats['pyaot_p50']:<8.1f} {stats['pyaot_p90']:<8.1f} {stats['pyaot_p99']:<8.1f} {stats['overhead_pct']:+.1f}%")
+        print(
+            f"{op:<10} {stats['count']:<8} {stats['baseline_mean']:<10.1f} "
+            f"{stats['pyaot_mean']:<10.1f} {stats['pyaot_p50']:<8.1f} {stats['pyaot_p90']:<8.1f} {stats['pyaot_p99']:<8.1f} {stats['overhead_pct']:+.1f}%"
+        )
 
     print("\n" + "=" * 70)
     print("SUMMARY")
@@ -478,7 +550,9 @@ def main():
     print(f"  Overhead: {overhead:+.1f}%")
 
     print(f"\nDatabase operations (SQLite) dominate latency.")
-    print(f"PyAOT tracing overhead: {(np.mean(pyaot) - np.mean(baseline))/1000:.1f} μs per request")
+    print(
+        f"PyAOT tracing overhead: {(np.mean(pyaot) - np.mean(baseline))/1000:.1f} μs per request"
+    )
 
     if data["compiled_traces"] == 0:
         print("\n⚠️  No traces compiled - TraceCompiler returns placeholder")
@@ -492,9 +566,11 @@ def main():
     print(f"\n| Operation | Baseline | PyAOT Mean | p99 | Reduction |")
     print("|-----------|----------|------------|-----|-----------|")
     for op, stats in op_data.items():
-        reduction = -stats['overhead_pct'] if stats['overhead_pct'] < 0 else 0
-        print(f"| {op} | {stats['baseline_mean']:.1f}μs | "
-              f"{stats['pyaot_mean']:.1f}μs | {stats['pyaot_p99']:.1f}μs | {reduction:.1f}% |")
+        reduction = -stats["overhead_pct"] if stats["overhead_pct"] < 0 else 0
+        print(
+            f"| {op} | {stats['baseline_mean']:.1f}μs | "
+            f"{stats['pyaot_mean']:.1f}μs | {stats['pyaot_p99']:.1f}μs | {reduction:.1f}% |"
+        )
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-@dataclass(unsafe_hash=True)
+@dataclass(frozen=True)
 class RequestSignature:
     """Stable abstraction of an HTTP request.
 
@@ -27,16 +27,17 @@ class RequestSignature:
     header_shape_hash: str
     body_shape_hash: str
 
-    def update(
-        self,
+    @classmethod
+    def from_request(
+        cls,
         method: str,
         path_template: str,
         params: dict[str, Any],
         headers: dict[str, str],
         body: Any,
         auth_state: str = "unknown",
-   ) -> None:
-        """Update fields in-place for pooling."""
+    ) -> "RequestSignature":
+        """Create a signature from request data."""
         # Extract parameter types
         param_types = tuple(
             (name, type(value).__name__) for name, value in sorted(params.items())
@@ -49,30 +50,14 @@ class RequestSignature:
         # Hash body structure
         body_shape_hash = _compute_body_shape_hash(body)
 
-        self.http_method = method.upper()
-        self.path_template = path_template
-        self.auth_state = auth_state
-        self.param_types = param_types
-        self.header_shape_hash = header_shape_hash
-        self.body_shape_hash = body_shape_hash
-
-    @classmethod
-    def from_request(
-        cls,
-        method: str,
-        path_template: str,
-        params: dict[str, Any],
-        headers: dict[str, str],
-        body: Any,
-        auth_state: str = "unknown",
-    ) -> "RequestSignature":
-        """Create a signature from request data."""
-        # Create empty instance then update
-        # Requires default values if avoiding init?
-        # We'll just init normally for new creations
-        sig = cls("GET", "/", "unknown", (), "", "")
-        sig.update(method, path_template, params, headers, body, auth_state)
-        return sig
+        return cls(
+            http_method=method.upper(),
+            path_template=path_template,
+            auth_state=auth_state,
+            param_types=param_types,
+            header_shape_hash=header_shape_hash,
+            body_shape_hash=body_shape_hash,
+        )
 
     def to_tuple(self) -> tuple[str, str, str, tuple[tuple[str, str], ...], str, str]:
         """Convert to hashable tuple."""

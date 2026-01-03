@@ -82,30 +82,26 @@ class HandlerOptimizer:
             return self._create_optimized_wrapper(self._optimized[signature])
 
         # Optimize: Compile trace if available
+        # NOTE: Current TraceLowerer generates placeholder IR, not full WSGI handler code.
+        # Native execution is disabled until lowerer can generate complete handler logic.
+        # Compilation still happens (for metrics/validation), but execution uses original handler.
         compiled_func = None
         if trace:
             try:
                 from pyaot.web.codegen.compiler import TraceCompiler
-                import ctypes
 
                 compiler = TraceCompiler(optimization_level=2)
                 artifact = compiler.compile(trace)
-                
-                # Assume trace_entry(environ, start_response) -> iterator
-                # Signature: PyObject* (*)(PyObject* environ, PyObject* start_response)
-                # We assume standard CPython calling convention via ctypes
-                FTYPE = ctypes.CFUNCTYPE(ctypes.py_object, ctypes.py_object, ctypes.py_object)
-                native_entry = FTYPE(artifact.function_ptr)
-                
-                # Keep reference to artifact to prevent GC of code
-                def compiled_wrapper(environ, start_response):
-                    return native_entry(environ, start_response)
-                
-                compiled_wrapper._artifact = artifact
-                compiled_func = compiled_wrapper
+
+                # Compilation succeeded - record for metrics
+                # But DON'T use native code for execution yet (signature mismatch)
+                # The lowerer produces int64(int64), not PyObject*(PyObject*, PyObject*)
+                # compiled_func remains None - we use original handler
+
+                # Store artifact reference for future use
+                handler._compiled_artifact = artifact
             except Exception:
-                # Compilation failed (e.g. LLVM not available or trace invalid)
-                # Fallback to original handler interpretation
+                # Compilation failed
                 pass
 
         opt_handler = OptimizedHandler(
@@ -135,34 +131,31 @@ class HandlerOptimizer:
         cache = self._response_cache
         sig_key = opt_handler.signature.to_tuple()
 
+        # Fast path for non-cacheable requests (POST/PUT/DELETE)
+        # Zero overhead - direct passthrough to original handler
+        if not is_cacheable:
+
+            def fast_wsgi(
+                environ: dict[str, Any], start_response: Callable
+            ) -> Iterator[bytes]:
+                """Zero-overhead passthrough for non-cacheable requests."""
+                return target_handler(environ, start_response)
+
+            return fast_wsgi
+
         def optimized_wsgi(
             environ: dict[str, Any], start_response: Callable
         ) -> Iterator[bytes]:
-            """Optimized WSGI handler."""
-            # Track stats
-            start = time.perf_counter_ns()
-            opt_handler.call_count += 1
+            """Optimized WSGI handler for cacheable (GET) requests."""
+            # Check cache
+            path = environ.get("PATH_INFO", "")
+            query = environ.get("QUERY_STRING", "")
+            cache_key = (sig_key, path, query)
 
-            # Check cache for GET requests
-            if is_cacheable:
-                 # Determine cache key including path/query for correctness
-                 path = environ.get("PATH_INFO", "")
-                 query = environ.get("QUERY_STRING", "")
-                 cache_key = (sig_key, path, query)
-
-                 if cache_key in cache:
-                     status, headers, body = cache[cache_key]
-                     start_response(status, headers)
-                     opt_handler.total_time_ns += time.perf_counter_ns() - start
-                     return iter([body])
-
-
-            # Non-cacheable path (POST/PUT/DELETE or Cache Miss)
-            # If compiled, execute compiled code. If not, execute original.
-            if not is_cacheable:
-                result = target_handler(environ, start_response)
-                opt_handler.total_time_ns += time.perf_counter_ns() - start
-                return result
+            if cache_key in cache:
+                status, headers, body = cache[cache_key]
+                start_response(status, headers)
+                return iter([body])
 
             # Cacheable Miss: Capture response
             captured_status = None
@@ -181,22 +174,14 @@ class HandlerOptimizer:
             if captured_status and captured_status.startswith("2"):
                 body_parts = list(result)
                 body = b"".join(body_parts)
-                # Compute key only when we need to store
-                path = environ.get("PATH_INFO", "")
-                query = environ.get("QUERY_STRING", "")
-                cache_key = (sig_key, path, query)
-                
                 cache[cache_key] = (captured_status, captured_headers, body)
                 result = iter([body])
 
-            opt_handler.total_time_ns += time.perf_counter_ns() - start
             return result
 
         return optimized_wsgi
 
-    def get_optimized(
-        self, signature: RequestSignature
-    ) -> Callable | None:
+    def get_optimized(self, signature: RequestSignature) -> Callable | None:
         """Get optimized handler for signature.
 
         Args:
