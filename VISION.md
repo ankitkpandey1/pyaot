@@ -256,9 +256,100 @@ Mark side-effecting operations in Trace IR. Paths with side effects stay interpr
 
 ---
 
+## Research Contributions
+
+This work does not claim novelty in trace-based compilation itself. Instead, it makes new contributions in making tracing **sound, practical, and production-safe** for Python web workloads — a domain where prior tracing systems have largely failed or deliberately avoided deployment.
+
+### 1. Request-Level Trace Compilation (New Granularity)
+
+We introduce **request-execution traces** as a compilation unit, shifting tracing from intra-program repetition (loops) to population-level repetition (similar requests across users).
+
+**Why this is new**: Prior trace-based systems (LuaJIT, PyPy, HotSpot C1) assume hot loops and optimize long-running code paths. Web handlers often contain no loops, are short-lived, and exhibit repetition *across requests*, not within one request.
+
+This work formalizes tracing under a **statistical repetition model**: if a request shape repeats across users with high probability, its execution path can be safely specialized.
+
+### 2. Trace Safety Under Side Effects (Unsolved in Prior Work)
+
+We define **trace cut rules** and **guard placement constraints** that preserve Python semantics in the presence of I/O, ORM/database access, authentication state, exceptions, and mutable global objects.
+
+**Key insight**: In web workloads, side effects dominate. Traces must be linear, side-effect respecting. No speculative reordering or elision is permitted. We treat side effects as **trace boundaries**, not optimizable instructions.
+
+### 3. Zero-Risk Speculation via Deterministic Fallback
+
+We propose a **zero semantic risk model** for speculative compilation:
+- Guarded execution
+- Deterministic interpreter fallback
+- Transactional trace boundaries
+
+Every compiled trace satisfies: for all inputs satisfying its guards, native execution is observationally equivalent to CPython execution. If any guard fails, execution transfers to the interpreter without partial side effects or state corruption.
+
+### 4. Adversarial Trace Resilience (New Problem Space)
+
+We identify and address **trace poisoning** as a first-class problem. Unlike classic JITs, web workloads are untrusted, input-controlled, and potentially adversarial.
+
+We introduce:
+- Multi-observation trace eligibility thresholds
+- Provenance tracking (route, signature, environment)
+- Guard-miss–driven invalidation
+- Time-based trace TTLs
+
+This prevents attackers from inducing pathological traces via crafted requests — a problem not considered in earlier tracing literature.
+
+### 5. Trace IR for Semantic-Preserving Lowering
+
+We introduce a **Trace Intermediate Representation (Trace IR)** that captures observed control flow, guard predicates, object shape access, and allocation intent (elidable vs materialized).
+
+Trace IR is linear, side-effect aware, and explicitly guarded. This avoids lifting Python AST or bytecode directly to LLVM, enabling precise scalar replacement, guard coalescing, controlled inlining, and deterministic lowering.
+
+### 6. CPython-Compatible Trace Compilation (Legacy-Constrained Design)
+
+We demonstrate that trace-based native execution is possible **without modifying CPython** while preserving C-extension interoperability, reference counting semantics, exception behavior, and interpreter invariants.
+
+Unlike PyPy or LuaJIT, this system does not own the VM, cannot alter the object model, and must interoperate with opaque C extensions. This explores **compiler–runtime co-design under strict legacy constraints**.
+
+### 7. Allocation Elimination in Allocation-Dominated Workloads
+
+We show that most web handler allocations are **logical, not semantic**, and can be eliminated via scalar replacement, stack allocation, and direct serialization from registers.
+
+Unlike numeric workloads, these allocations are short-lived, do not escape, and exist primarily for convenience. We formalize allocation elimination rules specific to web handlers.
+
+### 8. Production-Safe Deployment Model
+
+We propose a deployment model combining:
+- Observation-first compilation
+- Deterministic difftesting
+- Canary rollout
+- Guard-miss–driven rollback
+
+This closes the gap between research JITs and real-world deployment requirements, addressing why many prior systems failed operationally despite technical success.
+
+### 9. Empirical Characterization of Web Trace Viability
+
+We provide empirical characterization of:
+- Which web handler patterns are traceable
+- Guard-miss behavior under real traffic
+- Trace stability over time
+- Cost/benefit of specialization
+
+This answers an open question: *Is trace-based compilation viable for Python web workloads at all?* We show it is — under the constraints defined in this work.
+
+### Summary of Novelty
+
+This work does not invent tracing. It redefines **where tracing is viable**, **how it must be constrained**, and **how it can be made safe** for Python web systems.
+
+| Contribution | Domain |
+|--------------|--------|
+| Request-level tracing | New granularity |
+| Side-effect safety | New correctness constraints |
+| Anti-poisoning | New adversarial considerations |
+| Difftest + canary | New deployment guarantees |
+
+---
+
 ## References
 
 - [LuaJIT](http://luajit.org/)
 - [HotSpot](https://openjdk.org/groups/hotspot/)
 - [CPython PEP 659](https://peps.python.org/pep-0659/)
 - [Meta Cinder](https://github.com/facebookincubator/cinder)
+
