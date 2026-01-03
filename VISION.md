@@ -1,6 +1,22 @@
-# PyAOT Vision: High-Performance Python Web Applications
+# PyAOT-Web Vision: Trace-Based Compilation
 
-> **Mission**: Make Python web applications approach native performance — bridging the gap from 1K to 1M requests per second.
+> **Mission**: Compile *observed request execution traces*, not Python code, turning real production traffic into guarded native pipelines with zero semantic risk.
+
+---
+
+## The Key Insight
+
+### ❌ Wrong Approach
+> "Compile Python web handlers to native code"
+
+### ✅ Correct Approach  
+> "Compile **observed execution traces** of request handlers into guarded native micro-pipelines"
+
+This is the same conceptual leap that made:
+- JVM HotSpot viable
+- LuaJIT successful  
+- V8 TurboFan effective
+- CPython adaptive interpreter (PEP 659) workable
 
 ---
 
@@ -8,315 +24,391 @@
 
 ### The Python Web Performance Gap
 
-Python is the dominant language for web development (Django, Flask, FastAPI), yet suffers from a fundamental performance ceiling:
+| Metric | Python | Native | Gap |
+|--------|--------|--------|-----|
+| Requests/sec | 1-5K | 100-500K | 20-100x |
+| P99 latency | 5-50ms | 0.1-1ms | 10-50x |
+| Memory/request | 10-50KB | 1-5KB | 10x |
 
-| Metric | Python (Flask/FastAPI) | Native (Rust/Go) | Gap |
-|--------|------------------------|------------------|-----|
-| Requests/sec (single core) | ~1,000-5,000 | ~100,000-500,000 | 20-100x |
-| Latency (p99) | 5-50ms | 0.1-1ms | 10-50x |
-| Memory per request | ~10-50KB | ~1-5KB | 10x |
-| CPU utilization efficiency | 20-40% | 80-95% | 2-4x |
-
-### Why This Matters
-
-- **Cost**: Cloud bills scale linearly with inefficiency
-- **Latency**: User experience degrades above 100ms  
-- **Sustainability**: Energy waste at scale
-- **Competitive pressure**: Teams migrating to Go/Rust for performance
-
-### Root Causes
+### Root Cause
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                  Python Web Request                         │
-├─────────────────────────────────────────────────────────────┤
-│  [100-200ns] × 50-100 function calls         = 5-20μs      │
-│  [50ns] × 20-50 object allocations           = 1-5μs       │
-│  [30ns] × 100+ attribute accesses            = 3-10μs      │
-│  [500ns] exception handling setup            = 0.5μs       │
-│  [variable] GIL contention                   = 0-1000μs    │
-├─────────────────────────────────────────────────────────────┤
-│  TOTAL INTERPRETER OVERHEAD PER REQUEST      = 10-1000μs   │
-└─────────────────────────────────────────────────────────────┘
+Per-request interpreter overhead:
+├── Function calls (50-100 × 150ns)     = 10-15μs
+├── Object allocations (20-50 × 50ns)   = 1-5μs  
+├── Attribute lookups (100+ × 30ns)     = 3-10μs
+├── Branch dispatch overhead            = 2-5μs
+└── TOTAL                               = 15-35μs
 ```
 
-**Key insight**: Most webapp code is branching and data shuffling, not computation. The interpreter overhead dominates.
+**Target**: 1μs per request (1M req/sec)
 
 ---
 
 ## What We Are Trying to Achieve
 
-### Vision
-
-> **Write Python. Run like C.**
-
-Developers write idiomatic Python web applications. PyAOT profiles production traffic, identifies hot paths, and compiles entire request handlers to native code — transparently and safely.
-
 ### Goals
 
-| Goal | Metric | Target |
-|------|--------|--------|
-| **Throughput** | Requests/sec | 10-100x improvement |
-| **Latency** | P99 response time | 5-10x reduction |
-| **Compatibility** | Python semantics | 100% preserved |
-| **Developer experience** | Code changes required | Zero |
-| **Safety** | Production crashes from compilation | Zero |
+| Goal | Target |
+|------|--------|
+| Throughput | 10-100x improvement |
+| Latency | 5-10x reduction |
+| Compatibility | 100% Python semantics |
+| Code changes | Zero |
+| Production safety | Zero crashes |
 
 ### Non-Goals
 
-- Replacing CPython (we extend it)
-- Compiling all Python code (only hot paths)
-- Matching Rust/Go exactly (80% of performance with 100% Python)
+- Replacing CPython
+- Compiling all Python code
+- Matching Rust/Go exactly (target: 80% performance, 100% Python)
 
 ---
 
 ## Constraints
 
-### Technical Constraints
-
-| Constraint | Implication |
-|------------|-------------|
-| CPython compatibility | Must work with standard Python, no forks |
-| NumPy/Pandas ecosystem | Cannot break C extension interop |
-| Existing codebases | No code modifications required |
-| Production safety | Fallback to Python on any failure |
-| Multi-framework | Flask, FastAPI, Django, Starlette |
-
-### Architectural Constraints
+### Must Have
 
 | Constraint | Rationale |
 |------------|-----------|
-| Profile before compile | Cannot assume types without evidence |
-| Guard all assumptions | Types can change at runtime |
-| Preserve semantics | Same result as Python interpretation |
-| Incremental adoption | Opt-in, per-route, per-handler |
+| CPython compatibility | Standard interpreter, no forks |
+| Safe fallback | Any failure → Python execution |
+| Profile-first | No compilation without observation |
+| Semantic preservation | Identical results to Python |
 
-### Resource Constraints
+### Resource Limits
 
 | Resource | Limit |
 |----------|-------|
-| Compilation overhead | < 5% of total startup time |
-| Memory overhead | < 20% increase |
-| Profiling overhead | < 5% in observation mode |
-| Guard overhead | < 5% of compiled function time |
+| Guard overhead | < 100ns per trace entry |
+| Compilation overhead | < 5% startup time |
+| Memory overhead | < 20% |
+| Guard miss handling | < 500ns fallback |
 
 ---
 
-## Current Architecture
+## Architecture: Trace-Based Compilation
 
-### PyAOT Today (v0.x)
+### Core Concept
 
-```mermaid
-graph LR
-    subgraph "Scope: Numerical Functions"
-        A[Python Function] --> B{Is Leaf?}
-        B -->|Yes| C{Is Numerical?}
-        C -->|Yes| D[Compile via LLVM]
-        B -->|No| X[Skip]
-        C -->|No| X
-    end
+Instead of compiling entire handlers, compile **trace segments**:
+
+```
+┌──────────────┐
+│ HTTP Request │
+└──────┬───────┘
+       ▼
+┌──────────────────────────┐
+│ Route Dispatcher         │  (Python, guard-checked)
+└──────┬───────────────────┘
+       ▼
+┌──────────────────────────┐
+│ Trace Selector           │
+│  - request signature     │
+│  - route + auth + shape  │
+└──────┬───────────────────┘
+       ▼
+┌──────────────────────────────────────────┐
+│ Guarded Native Trace                     │
+│  - linearized execution path             │
+│  - branch-weighted                       │
+│  - allocation-free (scalar replacement)  │
+│  - no Python objects unless required     │
+└──────┬───────────────────────────────────┘
+       │                          │
+       │ guards pass              │ guards fail
+       ▼                          ▼
+┌──────────────┐         ┌──────────────────┐
+│ Native Exit  │         │ CPython Fallback │
+└──────────────┘         └──────────────────┘
 ```
 
-**Current capabilities**:
-- ✅ Compile pure numerical functions (`def f(x): return x * 2 + 1`)
-- ✅ NumPy array operations
-- ✅ SIMD vectorization
-- ✅ Profile-guided type specialization
+### What is a Trace?
 
-**Current limitations**:
-- ❌ Only "leaf" functions (no function calls allowed)
-- ❌ Only numerical types allowed
-- ❌ No I/O, no ORM, no web frameworks
-- ❌ No branch optimization
-- ❌ No request handler compilation
+A **trace segment** is:
+- A linearized execution path through a handler
+- Observed during profiling
+- With explicit guards on:
+  - Branch directions taken
+  - Object shapes encountered
+  - Attribute offsets accessed
+  - Call targets resolved
+  - Exception absence (no try/except triggered)
 
-### Gap Analysis
-
-| Requirement | Current | Needed |
-|-------------|---------|--------|
-| Compile function calls | ❌ Leaf-only | ✅ Full call trees |
-| Branch optimization | ❌ None | ✅ Profile-guided |
-| String handling | ❌ Unsupported | ✅ Fast paths |
-| Object attribute access | ⚠️ Shape guards | ✅ Inlined access |
-| Route matching | ❌ Unsupported | ✅ Compiled trie |
-| Database queries | ❌ Unsupported | ✅ Specialized deserializers |
+This avoids full control flow graph explosion.
 
 ---
 
-## Proposed Architecture
+## Example: Multi-Trace Compilation
 
-### PyAOT Web (v1.0)
-
-```mermaid
-graph TB
-    subgraph "Extended Scope: Web Handlers"
-        A[Web Request] --> R[Route Compiler]
-        R --> H[Handler Compiler]
-        
-        H --> BP[Branch Profiler]
-        H --> CT[Call Tree Compiler]
-        H --> AE[Allocation Eliminator]
-        
-        BP --> LLVM[LLVM Codegen]
-        CT --> LLVM
-        AE --> LLVM
-        
-        LLVM --> GUARD[Guarded Dispatcher]
-        GUARD -->|Pass| NATIVE[Native Execution]
-        GUARD -->|Fail| PYTHON[Python Fallback]
-    end
-```
-
-### New Subsystems
-
-#### 1. Branch Profiler
-Profile which branches are taken and with what frequency.
+### Original Handler
 
 ```python
-# Input: profiling data showing
-#   if user.is_admin: # True 95% of the time
-
-# Output: LLVM IR with branch weights
-br i1 %is_admin, label %hot, label %cold, !prof !{95, 5}
-```
-
-#### 2. Call Tree Compiler
-Compile entire call chains, not just leaf functions.
-
-```python
-# Input
-@app.route('/user/<id>')
 def get_user(id):
-    return serialize(db.get(User, id))
-
-# Output: Single native function covering
-#   - Route matching
-#   - Parameter extraction  
-#   - Database query
-#   - Serialization
+    if not current_user.is_authenticated:
+        return {'error': 'Unauthorized'}, 401
+    user = User.query.get(id)
+    if not user:
+        return {'error': 'Not found'}, 404
+    return {'id': user.id, 'name': user.name}
 ```
 
-#### 3. Route Compiler
-Compile URL routing to native state machines.
+### Compiled as Multiple Traces
+
+**Trace A (hot, 90% of requests)**
+```
+GUARDS:
+  - current_user.is_authenticated == True
+  - User.query.get returns non-null
+  - user.__dict__ layout == Shape#42
+  
+TRACE:
+  load_attr current_user.is_authenticated offset=48
+  branch_taken  
+  call db_fast_path(id)
+  guard_nonnull result
+  load_attr user.id offset=16
+  load_attr user.name offset=24
+  serialize_fast
+  return 200
+```
+
+**Trace B (cold, 5%)**
+```
+auth failed → fallback to Python
+```
+
+**Trace C (cold, 5%)**  
+```
+user not found → fallback to Python
+```
+
+**Result**: Hot path is native, cold paths stay Python. Safety intact.
+
+---
+
+## New Subsystems (Delta from Current PyAOT)
+
+### 1. Trace Recorder ⭐ (Most Important)
+
+**Not a profiler. A tracer.**
+
+Records during observation:
+- Bytecode instructions executed
+- Branch decisions (taken/not taken)
+- Call targets (resolved function pointers)
+- Attribute offsets (dict key positions)
+- Allocation sites (for elimination candidates)
+
+Bounded by route + request signature.
 
 ```python
-# Input: Flask/FastAPI routes
-# Output: Native trie traversal returning function pointers
+# Produces:
+TraceRecord(
+    route='/api/user/<id>',
+    signature=('int',),
+    branches=[(12, True, 0.95), (18, True, 0.90)],
+    attrs=[('user', 'id', 16), ('user', 'name', 24)],
+    calls=[('User.query.get', 0x7f...)],
+)
 ```
 
-#### 4. Allocation Eliminator
-Eliminate per-request object allocations.
+### 2. Trace IR (New Layer)
+
+**Do not lift Python AST directly to LLVM.**
+
+Introduce intermediate Trace IR:
+
+```
+GUARD_TYPE r0, User
+GUARD_SHAPE r0, Shape#42
+LOAD_ATTR_FAST r1, r0, offset=16    ; user.id
+LOAD_ATTR_FAST r2, r0, offset=24    ; user.name
+BRANCH_LIKELY label_success, prob=0.95
+ALLOC_ELIDED r3, dict
+CALL_DIRECT serialize_user, r1, r2
+RETURN r3
+```
+
+Then lower Trace IR → LLVM IR.
+
+This enables:
+- Branch weighting
+- Allocation removal (scalar replacement)
+- Call inlining
+- Guard coalescing
+
+### 3. Guarded Entry Stub
+
+Every compiled trace begins with guard checks:
+
+```llvm
+entry:
+  %g1 = call i1 @guard_type(%arg0, @User)
+  br i1 %g1, label %g2_check, label %fallback
+g2_check:
+  %g2 = call i1 @guard_shape(%arg0, 42)
+  br i1 %g2, label %hot_path, label %fallback
+hot_path:
+  ; native trace execution
+fallback:
+  tail call @python_interpreter(...)
+```
+
+Requirements:
+- Stub must be < 20 instructions
+- Predictable branch layout
+- Guard miss cost < 100ns
+
+### 4. Allocation Strategy (Corrected)
+
+**Priority order:**
+
+1. **Scalar replacement** — Split objects into registers
+2. **Stack allocation** — Short-lived, non-escaping objects
+3. **Arena allocation** — Only when escape analysis fails
+
+Most web handlers allocate *logically*, not *physically*. Scalar replacement handles 80% of cases.
 
 ```python
-# Before: 50 allocations per request
-# After: Arena allocation, 0 GC pressure
+# Before: allocates dict
+return {'id': user.id, 'name': user.name}
+
+# After scalar replacement: no allocation
+# id and name are in registers, serialized directly
 ```
 
-### Extended Eligibility
+### 5. Guard Miss Tracking
 
-| Current (Leaf-Only) | Proposed (Full Handler) |
-|---------------------|-------------------------|
-| No function calls | Traced function calls allowed |
-| Numerical types only | Strings, dicts, objects allowed |
-| No I/O | Profiled I/O patterns |
-| No attribute access | Shape-guarded attribute access |
+Guard miss rate is a **first-class metric**:
 
-### Safety Guarantees (Unchanged)
+```python
+@dataclass
+class TraceStats:
+    trace_id: str
+    executions: int
+    guard_misses: int
+    miss_rate: float  # If > 5%, consider retracing
+```
 
-All current safety guarantees remain:
+If miss rate exceeds threshold → trigger re-profiling and recompilation.
 
-1. **Semantic preservation**: Compiled code = Python behavior
-2. **Guard safety**: Any assumption violation → Python fallback
-3. **No crashes**: Fallback always available
-4. **No data corruption**: Atomic transitions
+---
+
+## GIL Strategy (Realistic)
+
+### Phase 1: Hold GIL, Reduce Traffic
+
+Native trace runs **while holding GIL**, but:
+- No Python API calls in hot path
+- No refcount operations (scalar replacement)
+- No object allocations
+
+This reduces contention dramatically without GIL bypass complexity.
+
+### Phase 2: Sub-Interpreter Isolation (Future)
+
+Move traces to per-interpreter model (PEP 684):
+- Each worker gets own interpreter
+- No shared GIL
+- True parallelism
+
+This is realistic and SOTA-2026.
+
+---
+
+## I/O Reality Check
+
+### Cannot Compile
+
+- Full database access end-to-end
+- Network I/O
+- File system operations
+
+### Can Compile
+
+- **Result decoding**: row → object → dict
+- **Serialization**: object → JSON bytes
+- **Validation**: request → validated params
+
+These alone yield large wins (50-100% improvement).
 
 ---
 
 ## Comparison: Before and After
 
-### Example: User API Endpoint
+### Current PyAOT (v0.x)
 
-```python
-@app.route('/api/user/<int:id>')
-def get_user(id: int):
-    if not current_user.is_authenticated:
-        return {'error': 'Unauthorized'}, 401
-    
-    user = User.query.get(id)
-    if not user:
-        return {'error': 'Not found'}, 404
-    
-    return {
-        'id': user.id,
-        'name': user.name,
-        'email': user.email,
-    }
+```
+Scope: Leaf numerical functions only
+Model: Compile function → LLVM
+Guard: Type guards on arguments
 ```
 
-| Aspect | Before (Python) | After (PyAOT Web) |
-|--------|-----------------|-------------------|
-| Route matching | O(n) regex | Native jump table |
-| `is_authenticated` check | 3 attr lookups | 1 guarded load |
-| `User.query.get(id)` | ORM overhead | Specialized query |
-| Dict construction | 4 allocations | Arena pre-alloc |
-| JSON serialization | Reflection-based | Compiled serializer |
-| **Total time** | ~500μs | ~5-50μs |
+### PyAOT-Web (v1.0)
+
+```
+Scope: Request execution traces
+Model: Record trace → Trace IR → LLVM
+Guard: Type + Shape + Branch + Call guards
+Multi-trace: Hot/cold path separation
+```
 
 ---
 
 ## Implementation Phases
 
-### Phase 1: Branch Optimization (Foundation)
-- Profile branch frequencies
-- Emit LLVM branch weights
-- **Impact**: 10-20% improvement
-
-### Phase 2: Full Handler Compilation (Core)
-- Relax leaf-only restriction
-- Compile traced call trees
-- **Impact**: 50-100% improvement
-
-### Phase 3: Route & Allocation (Throughput)
-- Native route compilation
-- Arena allocation
-- **Impact**: 100-200% improvement
-
-### Phase 4: I/O Specialization (End-to-End)
-- Query specialization
-- Template compilation
-- **Impact**: 50-100% improvement
-
-### Phase 5: GIL Bypass (Scaling)
-- Native code runs without GIL
-- Multi-core parallelism
-- **Impact**: 300-800% improvement (multi-core)
+| Phase | Subsystem | Impact |
+|-------|-----------|--------|
+| 1 | Trace Recorder | Foundation |
+| 2 | Trace IR + Lowering | Core compilation |
+| 3 | Guard generation | Safety |
+| 4 | Scalar replacement | Allocation elimination |
+| 5 | Branch weighting | Prediction optimization |
+| 6 | Result decoding specialization | I/O edge gains |
 
 ---
 
-## Success Criteria
+## Success Metrics
 
-| Phase | Metric | Baseline | Target | Validation |
-|-------|--------|----------|--------|------------|
-| 1 | Branch-heavy benchmark | 1.0x | 1.2x | `bench_branching.py` |
-| 2 | Handler latency | 500μs | 50μs | `wrk` benchmark |
-| 3 | Requests/sec | 5K | 50K | TechEmpower-style |
-| 4 | E2E latency | 10ms | 1ms | Production trace |
-| 5 | Multi-core scaling | 1x | 8x | 8-core benchmark |
+| Metric | Baseline | Target |
+|--------|----------|--------|
+| Hot path latency | 500μs | 50μs |
+| Guard miss rate | N/A | < 5% |
+| Trace compilation time | N/A | < 100ms |
+| Fallback cost | N/A | < 500ns |
+| Requests/sec | 5K | 50K |
+
+---
+
+## Why This Architecture is Credible
+
+Aligns with proven systems:
+- **HotSpot**: Tiered compilation, trace-based optimization
+- **LuaJIT**: Trace recording, guard-based execution
+- **V8 TurboFan**: Speculative optimization with deopt
+- **CPython PEP 659**: Adaptive specialization
+
+Avoids common mistakes:
+- ❌ "Compile all Python" fantasy
+- ❌ Unsound static typing assumptions
+- ❌ Framework-specific hacks
+- ❌ GIL bypass before basic optimization
 
 ---
 
 ## Open Questions
 
-1. **Framework priority**: Start with Flask, FastAPI, or Starlette?
-2. **ORM support**: SQLAlchemy priority vs raw SQL?
-3. **Deployment model**: JIT at startup vs pre-compiled artifacts?
-4. **Observability**: How to expose compilation stats to users?
+1. **Trace recording granularity**: Per-route? Per-signature? Per-branch-path?
+2. **Trace invalidation**: When to re-record after code changes?
+3. **Framework integration**: Hooks for Flask/FastAPI/Django?
+4. **Observability**: How to expose trace stats to developers?
 
 ---
 
 ## References
 
-- [TechEmpower Web Framework Benchmarks](https://www.techempower.com/benchmarks/)
-- [io_uring and high-performance I/O](https://unixism.net/loti/)
-- [LLVM Profile-Guided Optimization](https://llvm.org/docs/HowToBuildWithPGO.html)
-- [GraalPython: AOT-compiled Python](https://github.com/graalvm/graalpython)
+- LuaJIT: http://luajit.org/
+- HotSpot: https://openjdk.org/groups/hotspot/
+- CPython PEP 659: https://peps.python.org/pep-0659/
+- Meta Cinder: https://github.com/facebookincubator/cinder
