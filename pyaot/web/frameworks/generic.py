@@ -131,18 +131,8 @@ class WSGIMiddleware:
         # Phase 1: Check for compiled trace
         compiled = self._compiled_traces.get(signature)
         if compiled is not None:
-            try:
-                # Execute compiled trace
-                result = compiled(environ, start_response)
-                elapsed_ms = (time.perf_counter() - start_time) * 1000
-                self._metrics.record_execution(route_id, elapsed_ms)
-                self._metrics.record_cache_hit(route_id)
-                return result
-            except Exception:
-                # Deopt: compiled trace failed, fall back to CPython
-                self._metrics.record_deopt(route_id)
-                # Remove from cache and re-record
-                del self._compiled_traces[signature]
+             # Execute compiled trace (native code wrapper)
+             return compiled(environ, start_response)
 
         # Phase 2: Record trace during CPython execution
         self._metrics.record_cache_miss(route_id)
@@ -179,9 +169,9 @@ class WSGIMiddleware:
         self._pending_compilation.add(signature)
 
         try:
-            # Compile handler using optimizer
+            # Compile handler using optimizer + trace
             compile_start = time.perf_counter()
-            optimized = self._optimizer.optimize(signature, self._app)
+            optimized = self._optimizer.optimize(signature, self._app, trace)
             compile_ms = (time.perf_counter() - compile_start) * 1000
 
             # Store optimized handler

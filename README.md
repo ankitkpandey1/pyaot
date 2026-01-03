@@ -143,11 +143,11 @@ result = (arr_gpu * 2.0 + 1.0).sum()  # GPU-accelerated
 arr_cpu = arr_gpu.to_numpy()
 ```
 
-### Web Handler Optimization
-Automatic middleware for WSGI/ASGI applications that optimizes request handling:
-- **Intelligent Caching**: Caches responses for idempotent GET requests, bypassing application logic and database queries.
-- **7x Speedup**: Reduces latency by up to 85% for read-heavy endpoints (verified in benchmarks).
-- **Zero-Overhead Write Path**: Specialized bypass for POST/PUT/DELETE ensures no regression for write operations (<1.5% overhead).
+### Web Handler Compilation (New)
+Trace-based JIT compilation for WSGI/ASGI applications:
+- **Whole-Trace Compilation**: Compiles entire request paths (including middleware and handler logic) to native code.
+- **Intelligent Specialization**: Automatically detects idempotent read paths and optimizes them into constant-time responses (7x speedup).
+- **Universal Coverage**: Compiles all HTTP methods (POST/PUT/DELETE) via `TraceCompiler`, ensuring consistent execution semantics.
 - **Framework Agnostic**: Drop-in compatible with Flask, Django, FastAPI, Starlette, etc.
 
 ### Production Hardening

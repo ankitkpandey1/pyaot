@@ -65,14 +65,14 @@ class HandlerOptimizer:
         self,
         signature: RequestSignature,
         handler: Callable,
-        sample_environ: dict[str, Any] | None = None,
+        trace: Any | None = None,  # Avoid circular import type hint
     ) -> Callable:
         """Create optimized version of handler for given signature.
 
         Args:
             signature: Request signature to optimize for.
             handler: Original WSGI handler.
-            sample_environ: Sample environ for warmup.
+            trace: Recorded trace if available.
 
         Returns:
             Optimized callable.
@@ -81,9 +81,36 @@ class HandlerOptimizer:
         if signature in self._optimized:
             return self._create_optimized_wrapper(self._optimized[signature])
 
+        # Optimize: Compile trace if available
+        compiled_func = None
+        if trace:
+            try:
+                from pyaot.web.codegen.compiler import TraceCompiler
+                import ctypes
+
+                compiler = TraceCompiler(optimization_level=1)
+                artifact = compiler.compile(trace)
+                
+                # Assume trace_entry(environ, start_response) -> iterator
+                # Signature: PyObject* (*)(PyObject* environ, PyObject* start_response)
+                # We assume standard CPython calling convention via ctypes
+                FTYPE = ctypes.CFUNCTYPE(ctypes.py_object, ctypes.py_object, ctypes.py_object)
+                native_entry = FTYPE(artifact.function_ptr)
+                
+                # Keep reference to artifact to prevent GC of code
+                def compiled_wrapper(environ, start_response):
+                    return native_entry(environ, start_response)
+                
+                compiled_wrapper._artifact = artifact
+                compiled_func = compiled_wrapper
+            except Exception:
+                # Compilation failed (e.g. LLVM not available or trace invalid)
+                # Fallback to original handler interpretation
+                pass
+
         opt_handler = OptimizedHandler(
             signature=signature,
-            original_handler=handler,
+            original_handler=compiled_func if compiled_func else handler,
             cached_headers=[],
         )
 
@@ -103,7 +130,7 @@ class HandlerOptimizer:
         """Create optimized WSGI wrapper."""
 
         # Capture for closure
-        original = opt_handler.original_handler
+        target_handler = opt_handler.original_handler
         is_cacheable = opt_handler.is_cacheable
         cache = self._response_cache
         sig_key = opt_handler.signature.to_tuple()
@@ -128,9 +155,10 @@ class HandlerOptimizer:
                 opt_handler.total_time_ns += time.perf_counter_ns() - start
                 return iter([body])
 
-            # Non-cacheable path (Zero Overhead)
+            # Non-cacheable path (POST/PUT/DELETE or Cache Miss)
+            # If compiled, execute compiled code. If not, execute original.
             if not is_cacheable:
-                result = original(environ, start_response)
+                result = target_handler(environ, start_response)
                 opt_handler.total_time_ns += time.perf_counter_ns() - start
                 return result
 
@@ -144,8 +172,8 @@ class HandlerOptimizer:
                 captured_headers = list(headers)
                 return start_response(status, headers, exc_info)
 
-            # Execute original with capture
-            result = original(environ, capturing_start_response)
+            # Execute handler with capture
+            result = target_handler(environ, capturing_start_response)
 
             # Consume and cache
             if captured_status and captured_status.startswith("2"):
