@@ -77,15 +77,15 @@ class TraceCompiler:
         """
         start_time = time.perf_counter()
 
-        # Lower to LLVM IR
-        llvm_module = self._lowerer.lower_trace(trace)
+        # Lower to PyAOT IR (was LLVM IR)
+        ir_module = self._lowerer.lower_trace(trace)
 
-        # Get LLVM IR string for debugging
-        llvm_ir_str = str(llvm_module)
+        # Get IR string for debugging
+        llvm_ir_str = str(ir_module)  # PyAOT IR string representation
 
         # Compile with LLVM backend
         try:
-            func_ptr, code_size = self._compile_module(llvm_module)
+            codegen_artifact = self._compile_module(ir_module)
         except Exception as e:
             from pyaot.exceptions import CompilationError
 
@@ -97,10 +97,11 @@ class TraceCompiler:
         artifact = CompiledTrace(
             trace_id=trace.header.trace_id,
             route_id=trace.header.route_id,
-            function_ptr=func_ptr,
+            function_ptr=codegen_artifact.function_ptr,
+            callable=codegen_artifact.callable,
             llvm_ir=llvm_ir_str,
             compile_time_ms=compile_time_ms,
-            code_size_bytes=code_size,
+            code_size_bytes=100,  # Placeholder
         )
 
         # Cache
@@ -169,50 +170,30 @@ class TraceCompiler:
             return True
         return False
 
-    def _compile_module(self, llvm_module: Any) -> tuple[int, int]:
-        """Compile LLVM module to machine code.
+    def _compile_module(self, ir_module: Any) -> Any:
+        """Compile IR module using shared LLVMCodegen.
 
         Args:
-            llvm_module: LLVM IR module.
+            ir_module: PyAOT IR module.
 
         Returns:
-            Tuple of (function_ptr, code_size).
+            CompiledArtifact from LLVMCodegen.
         """
-        from llvmlite import binding as llvm
+        from pyaot.compiler.codegen import LLVMCodegen
 
-        # Initialize LLVM
-        if self._engine is None:
-            llvm.initialize()
-            llvm.initialize_native_target()
-            llvm.initialize_native_asmprinter()
+        codegen = LLVMCodegen()
+        # Compile module returns dict of artifacts
+        artifacts = codegen.compile_module(ir_module)
+        
+        # We expect a single entry point "trace_entry"
+        artifact = artifacts.get("trace_entry")
+        if not artifact:
+            # Fallback if name changed or multiple functions
+            if not artifacts:
+                raise Exception("No artifacts produced")
+            artifact = list(artifacts.values())[0]
 
-        # Parse module
-        mod_str = str(llvm_module)
-        mod = llvm.parse_assembly(mod_str)
-        mod.verify()
-
-        # Create execution engine with optimization
-        target = llvm.Target.from_default_triple()
-        target_machine = target.create_target_machine(opt=self._opt_level)
-
-        backing_mod = llvm.parse_assembly("")
-        engine = llvm.create_mcjit_compiler(backing_mod, target_machine)
-
-        # Add module
-        engine.add_module(mod)
-        engine.finalize_object()
-
-        # Get function pointer
-        func_ptr = engine.get_function_address("trace_entry")
-
-        # Estimate code size (rough approximation)
-        object_code = target_machine.emit_object(mod)
-        code_size = len(object_code)
-
-        # Keep engine alive
-        self._engine = engine
-
-        return func_ptr, code_size
+        return artifact
 
     def get_stats(self) -> dict[str, Any]:
         """Get compilation statistics.

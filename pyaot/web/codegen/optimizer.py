@@ -143,17 +143,19 @@ class HandlerOptimizer:
             start = time.perf_counter_ns()
             opt_handler.call_count += 1
 
-            # Determine cache key including path/query for correctness
-            path = environ.get("PATH_INFO", "")
-            query = environ.get("QUERY_STRING", "")
-            cache_key = (sig_key, path, query)
-
             # Check cache for GET requests
-            if is_cacheable and cache_key in cache:
-                status, headers, body = cache[cache_key]
-                start_response(status, headers)
-                opt_handler.total_time_ns += time.perf_counter_ns() - start
-                return iter([body])
+            if is_cacheable:
+                 # Determine cache key including path/query for correctness
+                 path = environ.get("PATH_INFO", "")
+                 query = environ.get("QUERY_STRING", "")
+                 cache_key = (sig_key, path, query)
+
+                 if cache_key in cache:
+                     status, headers, body = cache[cache_key]
+                     start_response(status, headers)
+                     opt_handler.total_time_ns += time.perf_counter_ns() - start
+                     return iter([body])
+
 
             # Non-cacheable path (POST/PUT/DELETE or Cache Miss)
             # If compiled, execute compiled code. If not, execute original.
@@ -179,6 +181,11 @@ class HandlerOptimizer:
             if captured_status and captured_status.startswith("2"):
                 body_parts = list(result)
                 body = b"".join(body_parts)
+                # Compute key only when we need to store
+                path = environ.get("PATH_INFO", "")
+                query = environ.get("QUERY_STRING", "")
+                cache_key = (sig_key, path, query)
+                
                 cache[cache_key] = (captured_status, captured_headers, body)
                 result = iter([body])
 

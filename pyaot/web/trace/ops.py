@@ -175,20 +175,20 @@ class CallTargetTable:
     Call targets are identified by stable content hash, not pointers.
     """
 
-    _targets: list[str] = field(default_factory=list)  # content hashes
+    _targets: list[tuple[str, str]] = field(default_factory=list)  # (content_hash, name)
     _index: dict[str, int] = field(default_factory=dict)
 
-    def add(self, target_hash: str) -> int:
+    def add(self, target_hash: str, name: str = "") -> int:
         """Add a call target and return its ID."""
         if target_hash in self._index:
             return self._index[target_hash]
         idx = len(self._targets)
-        self._targets.append(target_hash)
+        self._targets.append((target_hash, name))
         self._index[target_hash] = idx
         return idx
 
-    def get(self, idx: int) -> str:
-        """Get call target hash by ID."""
+    def get(self, idx: int) -> tuple[str, str]:
+        """Get call target (hash, name) by ID."""
         return self._targets[idx]
 
     def __len__(self) -> int:

@@ -4,6 +4,8 @@
 
 PyAOT-Web compiles observed request traces (with guards and deopt), not arbitrary Python code — prioritizing correctness and gradual rollout while delivering native hot-path latency improvements.
 
+The tracer never emits LLVM or native code. Native code is emitted only by the existing PyAOT compiler, after traces become eligible and are converted into guard and deoptimization annotations.
+
 ---
 
 ## The Key Insight
@@ -15,6 +17,21 @@ PyAOT-Web compiles observed request traces (with guards and deopt), not arbitrar
 > "Compile **observed execution traces** of request handlers into guarded native micro-pipelines"
 
 This is the same conceptual leap that made HotSpot, LuaJIT, V8, and CPython PEP 659 effective.
+
+## Responsibility Split
+
+### Tracer
+Observes execution and emits metadata only:
+execution-path fingerprints, guard conditions, and deoptimization metadata.
+
+### PyAOT Compiler (existing)
+Owns all lowering and code generation:
+Python → LLVM → native code, inserting guards and deopt calls using tracer metadata.
+
+### LLVM
+Performs optimization and native code emission.
+
+No new IR is introduced.
 
 ---
 

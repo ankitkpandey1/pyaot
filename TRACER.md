@@ -250,7 +250,7 @@ This keeps per-request overhead predictable.
 
 ## 9. Trace IR Emission
 
-Tracer emits **Trace IR**, not LLVM, not Python AST.
+Tracer emits trace annotations over the existing PyAOT IR.
 
 ### Emission Rules
 

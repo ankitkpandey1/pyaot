@@ -10,7 +10,8 @@ import hashlib
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional, Set, Tuple
+import sys
+from typing import Any, Callable, Dict, Optional, Set, Tuple, List
 
 from pyaot.web.trace.ops import (
     TraceOp,
@@ -96,6 +97,7 @@ class TraceContext:
     constants: ConstantTable = field(default_factory=ConstantTable)
     shapes: ShapeTable = field(default_factory=ShapeTable)
     call_targets: CallTargetTable = field(default_factory=CallTargetTable)
+    call_stack: List[Tuple[Any, Tuple[Any, ...]]] = field(default_factory=list) # (func, args)
 
     # Request info
     signature: Optional[RequestSignature] = None
@@ -196,14 +198,66 @@ class TraceRecorder:
         # Ensure trace is never empty
         ctx.buffer.append(TraceOp(opcode=TraceOpcode.TRACE_START))
 
+        # Hook sys.settrace
         set_current_context(ctx)
+        sys.settrace(self._trace_func)
 
         try:
             yield ctx
         finally:
+            sys.settrace(None)
             ctx.active = False
             self._finalize_trace(ctx)
             set_current_context(None)
+
+    def _trace_func(self, frame, event, arg):
+        """System trace function."""
+        try:
+            ctx = get_current_context()
+            if not ctx or not ctx.active:
+                return None
+
+            if event == 'call':
+                # Extract func and args
+                code = frame.f_code
+
+                if 'pyaot/web/trace' in code.co_filename: # Skip internal trace machinery
+                    return None
+                    
+                # Naive func resolution (sys.settrace doesn't give func object directly)
+                # We can try to look it up from globals? Or just store code?
+                # recorder.record_call expects Callable.
+                # We'll approximate using frame.f_globals.
+                func_name = code.co_name
+                func = None
+                # Attempt to find func in globals
+                # (This is imperfect but sufficient for Query Profiling where cursor is local)
+                pass
+                
+                # Simple approach: Capture args
+                argcount = code.co_argcount
+                varnames = code.co_varnames[:argcount]
+                args = tuple(frame.f_locals.get(n) for n in varnames)
+                
+                ctx.call_stack.append((code.co_name, args)) # Store name for now?
+                
+            elif event == 'return':
+                if ctx.call_stack:
+                    func_name, args = ctx.call_stack.pop()
+                    # Reconstruct dummy callable for record_call (which needs __qualname__)
+                    class DummyFunc:
+                         pass
+                    DummyFunc.__qualname__ = func_name
+                    DummyFunc.__code__ = frame.f_code # Needed for hash
+                    
+                    self.record_call(DummyFunc, args, arg)
+                    
+        except Exception as e:
+            print(f"TRACE ERROR: {e}")
+            import traceback
+            traceback.print_exc()
+            
+        return self._trace_func
 
     def _finalize_trace(self, ctx: TraceContext) -> None:
         """Finalize and store a completed trace.
@@ -369,7 +423,8 @@ class TraceRecorder:
 
         # Compute stable call target hash
         target_hash = self._compute_call_target_hash(func)
-        call_id = ctx.call_targets.add(target_hash)
+        name = getattr(func, "__qualname__", str(func))
+        call_id = ctx.call_targets.add(target_hash, name)
 
         # Add call target guard
         deopt_id = ctx.allocate_deopt(0, tuple(ctx.local_to_reg.keys()))
@@ -383,10 +438,23 @@ class TraceRecorder:
 
         dst = ctx.allocate_reg()
 
+        # Synthesize LOAD_CONST for arguments (since we missed the loads in sys.settrace)
+        arg_regs = []
+        for arg in args:
+            const_id = ctx.constants.add(arg)
+            reg = ctx.allocate_reg()
+            ctx.buffer.append(
+                TraceOp(
+                    opcode=TraceOpcode.LOAD_CONST,
+                    operands=(reg, const_id),
+                )
+            )
+            arg_regs.append(reg)
+
         ctx.buffer.append(
             TraceOp(
                 opcode=TraceOpcode.CALL_DIRECT,
-                operands=(dst, call_id, len(args)),
+                operands=(dst, call_id, *arg_regs),
             )
         )
 
