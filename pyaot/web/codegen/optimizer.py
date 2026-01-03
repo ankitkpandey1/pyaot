@@ -88,7 +88,7 @@ class HandlerOptimizer:
                 from pyaot.web.codegen.compiler import TraceCompiler
                 import ctypes
 
-                compiler = TraceCompiler(optimization_level=1)
+                compiler = TraceCompiler(optimization_level=2)
                 artifact = compiler.compile(trace)
                 
                 # Assume trace_entry(environ, start_response) -> iterator
