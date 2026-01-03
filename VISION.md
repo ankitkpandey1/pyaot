@@ -38,7 +38,7 @@ Per-request interpreter overhead:
 └── TOTAL                               = 15-35μs
 ```
 
-**Target**: ~1μs **handler CPU work** for hot-path code (excludes network/DB I/O). Treat as aspirational — validate on target hardware.
+**Target**: ~1μs **handler CPU work** for hot-path code (excludes network/DB I/O). Treat as aspirational — validate on target hardware — report the hardware config used (CPU family, clocks, NUMA, kernel).
 
 ---
 
@@ -61,9 +61,9 @@ Per-request interpreter overhead:
 
 | Resource | Limit | Notes |
 |----------|-------|-------|
-| Guard microbudget | 200–500ns per check | validate on target hardware |
-| Guard miss handling | single-digit µs | primary lever: keep miss rate low |
-| Trace compilation (lightweight) | < 500ms | runtime mode |
+| Guard microbudget | target 200–500ns per check | **measure and validate on target hardware**; treat as goal not guarantee |
+| Guard miss handling | expected single-digit µs to transfer control | materialization costs may add µs — keep miss-rate low |
+| Trace compilation (lightweight) | target < 500ms | specify worst-case and median from telemetry |
 | Trace compilation (full PGO) | < 5s | CI mode |
 | Memory overhead | < 20% | |
 
@@ -76,16 +76,22 @@ Per-request interpreter overhead:
 | Code size per route | 512KB | prevent binary bloat |
 | Max traces per route | 8 | bound memory footprint |
 
+### Inlining Cost Model
+
+```
+benefit_score = call_count * estimated_cycles_saved - code_size_penalty
+```
+
+Inline if `benefit_score > threshold`. Use as compile heuristic to prevent code bloat.
+
 ---
 
 ## Why This Is Not LuaJIT
 
-PyAOT-Web learns from LuaJIT's successes but explicitly addresses its production pain points:
-
 | Issue | LuaJIT | PyAOT-Web |
 |-------|--------|-----------|
-| **Compilation model** | Runtime-only JIT | AOT-first: CI precompile for stable routes; runtime compilation bounded |
-| **Equivalence testing** | No formal difftest | Every trace passes deterministic equivalence test vs CPython |
+| **Compilation model** | Runtime-only JIT | AOT-first: CI precompile for stable routes |
+| **Equivalence testing** | No formal difftest | Every trace passes deterministic equivalence test |
 | **Semantic safety** | Speculative rewrites | No speculative elision of I/O, side effects, exceptions |
 | **Guard poisoning** | Unbounded | Require N observations across M client prefixes + TTL |
 | **Code bloat** | Unbounded inlining | Explicit code budgets and cost model |
@@ -132,6 +138,8 @@ Every compiled trace must pass deterministic equivalence:
 - Fuzz mode: mutate inputs to find divergence
 - Run on every CI build and before canary promotion
 
+**Difftest policy**: All recorded canonical traces must pass 100% byte-for-byte equivalence on CI. Fuzzed trace checks require no divergences for a sampled set of N=1000. Any divergence fails the build; divergences must be triaged as either a compiler bug or a necessary semantic restriction.
+
 ### Replay Format (Versioned)
 
 ```protobuf
@@ -151,11 +159,13 @@ message TraceRecord {
 
 | Rule | Value |
 |------|-------|
-| Min observations before compile | 100 |
+| Min observations before compile | 100 (recommend tuning via telemetry; require observations from ≥3 distinct subnets) |
 | Min distinct client IP prefixes | 3 |
 | Observation window | 1 hour minimum |
 | Trace TTL | 24 hours (re-validate) |
 | Reject single-shot traces | Always |
+
+**Rationale**: These thresholds prevent single-attacker poisoning while allowing legitimate hot paths to compile. Tune from telemetry during canary phase.
 
 ### Side-Effect Safety
 
@@ -166,6 +176,8 @@ Traces must NOT speculatively reorder or elide:
 - Logging with observable effects
 
 Mark side-effecting operations in Trace IR. Paths with side effects stay interpreted or use strict ordering guards.
+
+**Transactional Deopt**: Compiled traces must not commit partial external side effects. If a compiled path would reach a point that commits externally (DB write, external API call), it must either (a) include a guard ensuring the path is safe for commit, or (b) transfer control back to the interpreter before commit. Deopt must be transactional: either complete native path or transfer to interpreter before any external commit.
 
 ---
 
@@ -181,9 +193,11 @@ Mark side-effecting operations in Trace IR. Paths with side effects stay interpr
 ### Mode B: Runtime Lightweight AOT (Emergent Traces)
 
 - Minimal optimization, fast codegen
-- Compile time: < 500ms
+- Compile time: target < 500ms
 - Background promotion to full optimization
 - Auto-disabled on high guard miss rate
+
+**Note**: Runtime lightweight code is intended as short-lived; background promotion to full PGO artifacts must be opt-in and rate-limited to prevent resource exhaustion.
 
 ---
 
@@ -202,15 +216,39 @@ Mark side-effecting operations in Trace IR. Paths with side effects stay interpr
 
 ## Observability & SLOs
 
-| Metric | Alert Threshold |
-|--------|-----------------|
-| `py_aot.trace.guard_miss_rate` | > 5% → retrace; > 15% → auto-rollback |
-| `py_aot.trace.compiled_hit_rate` | < 80% → investigate coverage |
-| `py_aot.trace.compilation_error_rate` | > 1% → pause compilation |
-| `py_aot.trace.fallback_rate` | > 50% → review trace quality |
-| `py_aot.perf.hotpath_cpu_ns` | histogram, P99 target |
+| Metric | Type | Alert Threshold |
+|--------|------|-----------------|
+| `py_aot.trace.guard_miss_rate` | gauge | > 5% → retrace; > 15% → auto-rollback |
+| `py_aot.trace.compiled_hit_rate` | gauge | < 80% → investigate coverage |
+| `py_aot.trace.compilation_error_rate` | gauge | > 1% → pause compilation |
+| `py_aot.trace.fallback_rate` | gauge | > 50% → review trace quality |
+| `py_aot.perf.hotpath_cpu_ns` | histogram (p50/p95/p99) | track regression |
 
 **Guard-miss rate is the first-class rollback signal.**
+
+---
+
+## Testing & Rollout Checklist
+
+### CI Gating
+
+- [ ] Difftest pass for all recorded traces → artifact signed
+- [ ] No artifact may be promoted to canary without passing difftest and static safety checks
+
+### Canary Deployment
+
+- [ ] Deploy artifacts to 1–5% traffic
+- [ ] Watch `guard_miss_rate`, latency, error-rate for 15 minutes
+
+### Auto-Rollback Rules
+
+- [ ] If `guard_miss_rate > 15%` for 5 minutes → rollback
+- [ ] If p95 latency regresses > 10% → rollback
+- [ ] Auto-disable compiled traces for affected route
+
+### Telemetry Tuning
+
+- [ ] After 1 week, use observed miss rates to tune min-observations and TTL
 
 ---
 
@@ -222,16 +260,6 @@ Mark side-effecting operations in Trace IR. Paths with side effects stay interpr
 | guard_miss_rate > threshold | Retrace |
 | New shape above support count | Extend/replace trace |
 | TTL (24h) | Re-validate |
-
----
-
-## Testing Checklist
-
-- [ ] **Difftest**: 100% deterministic equivalence on recorded traces
-- [ ] **Microbench**: TechEmpower-style (branch, alloc, attr heavy)
-- [ ] **Real-app**: FastAPI + DB, Django list, Flask form
-- [ ] **Chaos**: Guard-miss spikes → verify safe fallback
-- [ ] **Performance**: Measure guard overhead on target hardware
 
 ---
 
@@ -250,7 +278,7 @@ Mark side-effecting operations in Trace IR. Paths with side effects stay interpr
 
 | Metric | Baseline | Goal | Validated |
 |--------|----------|------|-----------|
-| Hot path CPU | 500μs | 50μs | TBD |
+| Hot path CPU | 500μs | 50μs | TBD (measure on target hardware) |
 | Guard miss rate | N/A | < 5% | TBD |
 | Compiled hit rate | 0% | > 80% | TBD |
 
@@ -264,78 +292,41 @@ This work does not claim novelty in trace-based compilation itself. Instead, it 
 
 We introduce **request-execution traces** as a compilation unit, shifting tracing from intra-program repetition (loops) to population-level repetition (similar requests across users).
 
-**Why this is new**: Prior trace-based systems (LuaJIT, PyPy, HotSpot C1) assume hot loops and optimize long-running code paths. Web handlers often contain no loops, are short-lived, and exhibit repetition *across requests*, not within one request.
+**Why this is new**: Prior trace-based systems (LuaJIT, PyPy, HotSpot C1) assume hot loops. Web handlers exhibit repetition *across requests*, not within one request. This work formalizes tracing under a **statistical repetition model**.
 
-This work formalizes tracing under a **statistical repetition model**: if a request shape repeats across users with high probability, its execution path can be safely specialized.
+### 2. Trace Safety Under Side Effects
 
-### 2. Trace Safety Under Side Effects (Unsolved in Prior Work)
-
-We define **trace cut rules** and **guard placement constraints** that preserve Python semantics in the presence of I/O, ORM/database access, authentication state, exceptions, and mutable global objects.
-
-**Key insight**: In web workloads, side effects dominate. Traces must be linear, side-effect respecting. No speculative reordering or elision is permitted. We treat side effects as **trace boundaries**, not optimizable instructions.
+We define **trace cut rules** and **guard placement constraints** that preserve Python semantics in the presence of I/O, ORM access, authentication state, exceptions, and mutable globals. We treat side effects as **trace boundaries**, not optimizable instructions.
 
 ### 3. Zero-Risk Speculation via Deterministic Fallback
 
-We propose a **zero semantic risk model** for speculative compilation:
-- Guarded execution
-- Deterministic interpreter fallback
-- Transactional trace boundaries
+We propose a **zero semantic risk model**: guarded execution, deterministic interpreter fallback, transactional trace boundaries. If any guard fails, execution transfers to the interpreter without partial side effects.
 
-Every compiled trace satisfies: for all inputs satisfying its guards, native execution is observationally equivalent to CPython execution. If any guard fails, execution transfers to the interpreter without partial side effects or state corruption.
+### 4. Adversarial Trace Resilience
 
-### 4. Adversarial Trace Resilience (New Problem Space)
-
-We identify and address **trace poisoning** as a first-class problem. Unlike classic JITs, web workloads are untrusted, input-controlled, and potentially adversarial.
-
-We introduce:
-- Multi-observation trace eligibility thresholds
-- Provenance tracking (route, signature, environment)
-- Guard-miss–driven invalidation
-- Time-based trace TTLs
-
-This prevents attackers from inducing pathological traces via crafted requests — a problem not considered in earlier tracing literature.
+We address **trace poisoning** as a first-class problem via multi-observation thresholds, provenance tracking, guard-miss–driven invalidation, and time-based TTLs.
 
 ### 5. Trace IR for Semantic-Preserving Lowering
 
-We introduce a **Trace Intermediate Representation (Trace IR)** that captures observed control flow, guard predicates, object shape access, and allocation intent (elidable vs materialized).
+We introduce **Trace IR** — linear, side-effect aware, explicitly guarded — avoiding direct Python AST → LLVM lowering.
 
-Trace IR is linear, side-effect aware, and explicitly guarded. This avoids lifting Python AST or bytecode directly to LLVM, enabling precise scalar replacement, guard coalescing, controlled inlining, and deterministic lowering.
+### 6. CPython-Compatible Trace Compilation
 
-### 6. CPython-Compatible Trace Compilation (Legacy-Constrained Design)
+Trace-based native execution **without modifying CPython**, preserving C-extension interop, refcounting, and exception behavior.
 
-We demonstrate that trace-based native execution is possible **without modifying CPython** while preserving C-extension interoperability, reference counting semantics, exception behavior, and interpreter invariants.
+### 7. Allocation Elimination in Web Workloads
 
-Unlike PyPy or LuaJIT, this system does not own the VM, cannot alter the object model, and must interoperate with opaque C extensions. This explores **compiler–runtime co-design under strict legacy constraints**.
-
-### 7. Allocation Elimination in Allocation-Dominated Workloads
-
-We show that most web handler allocations are **logical, not semantic**, and can be eliminated via scalar replacement, stack allocation, and direct serialization from registers.
-
-Unlike numeric workloads, these allocations are short-lived, do not escape, and exist primarily for convenience. We formalize allocation elimination rules specific to web handlers.
+Most web handler allocations are **logical, not semantic**, and can be eliminated via scalar replacement and stack allocation.
 
 ### 8. Production-Safe Deployment Model
 
-We propose a deployment model combining:
-- Observation-first compilation
-- Deterministic difftesting
-- Canary rollout
-- Guard-miss–driven rollback
+Observation-first compilation, deterministic difftesting, canary rollout, guard-miss–driven rollback.
 
-This closes the gap between research JITs and real-world deployment requirements, addressing why many prior systems failed operationally despite technical success.
+### 9. Empirical Characterization
 
-### 9. Empirical Characterization of Web Trace Viability
-
-We provide empirical characterization of:
-- Which web handler patterns are traceable
-- Guard-miss behavior under real traffic
-- Trace stability over time
-- Cost/benefit of specialization
-
-This answers an open question: *Is trace-based compilation viable for Python web workloads at all?* We show it is — under the constraints defined in this work.
+We characterize which web handler patterns are traceable, guard-miss behavior, trace stability, and cost/benefit of specialization.
 
 ### Summary of Novelty
-
-This work does not invent tracing. It redefines **where tracing is viable**, **how it must be constrained**, and **how it can be made safe** for Python web systems.
 
 | Contribution | Domain |
 |--------------|--------|
@@ -352,4 +343,3 @@ This work does not invent tracing. It redefines **where tracing is viable**, **h
 - [HotSpot](https://openjdk.org/groups/hotspot/)
 - [CPython PEP 659](https://peps.python.org/pep-0659/)
 - [Meta Cinder](https://github.com/facebookincubator/cinder)
-
