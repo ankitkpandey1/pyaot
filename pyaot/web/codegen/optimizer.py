@@ -1,226 +1,196 @@
-"""Optimized handler compiler for web requests.
+"""Trace-based native code optimizer for web handlers.
 
-Instead of full native code compilation (which requires complex LLVM integration),
-this provides Python-level optimizations that significantly reduce overhead:
+Compiles observed execution traces into native code using PyAOT's
+InlineCompiler infrastructure. This is real compilation, not caching.
 
-1. Pre-computed route matching
-2. Cached response serialization
-3. Optimized guard checks
-4. Inline handler execution
-
-This is a practical approach that works NOW and provides measurable speedup.
+The HTTP method is irrelevant to compilation - all traced functions
+are compiled to native code with guards and deoptimization support.
 """
 
 from __future__ import annotations
 
-import json
 import time
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Iterator
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional
 
 from pyaot.web.trace.signature import RequestSignature
+from pyaot.compiler.inline_codegen import (
+    InlineCompiler,
+    GuardedArtifact,
+    compile_for_inline,
+    get_inline_compiler,
+    LLVMLITE_AVAILABLE,
+)
 
 if TYPE_CHECKING:
-    pass
+    from pyaot.web.trace.store import TraceRecord
 
 
 @dataclass
-class OptimizedHandler:
-    """An optimized handler wrapper.
+class CompiledHandler:
+    """A handler compiled to native code.
 
     Attributes:
-        signature: Request signature this is optimized for.
-        original_handler: The original handler function.
-        cached_response: Cached response if deterministic.
-        call_count: Number of times called.
-        total_time_ns: Total execution time.
+        signature: Request signature this is compiled for.
+        artifact: The compiled native code artifact with guards.
+        original_handler: Original Python handler for deopt fallback.
+        native_calls: Count of successful native executions.
+        fallback_calls: Count of fallback executions (guard failures).
     """
 
     signature: RequestSignature
+    artifact: Optional[GuardedArtifact]
     original_handler: Callable
-    cached_response: bytes | None = None
-    cached_status: str = ""
-    cached_headers: list = None
-    is_cacheable: bool = False
-    call_count: int = 0
-    total_time_ns: int = 0
+    native_calls: int = 0
+    fallback_calls: int = 0
+    compile_time_ms: float = 0.0
 
 
 class HandlerOptimizer:
-    """Optimizes web handlers based on observed traces.
+    """Compiles web handlers to native code using trace-based compilation.
 
-    Optimization strategies:
-    1. Response caching: For idempotent GET requests with stable output
-    2. Guard elision: Skip type checks for stable signatures
-    3. Inline execution: Reduce function call overhead
+    This uses PyAOT's InlineCompiler to:
+    1. Lower Python handler AST to IR
+    2. Compile IR to native code via LLVM
+    3. Execute native code when guards pass
+    4. Fall back to Python when guards fail
+
+    HTTP method is irrelevant - all handlers are compiled equally.
     """
 
     def __init__(self) -> None:
-        """Initialize optimizer."""
-        self._optimized: dict[RequestSignature, OptimizedHandler] = {}
-        self._response_cache: dict[tuple, tuple[str, list, bytes]] = {}
+        """Initialize optimizer with InlineCompiler."""
+        self._compiler = get_inline_compiler()
+        self._compiled: dict[RequestSignature, CompiledHandler] = {}
         self._compile_count = 0
+        self._total_compile_time_ms = 0.0
+
+    @property
+    def is_native_available(self) -> bool:
+        """Check if native compilation is available."""
+        return LLVMLITE_AVAILABLE and self._compiler.is_available
 
     def optimize(
         self,
         signature: RequestSignature,
         handler: Callable,
-        trace: Any | None = None,  # Avoid circular import type hint
+        trace: Any | None = None,
     ) -> Callable:
-        """Create optimized version of handler for given signature.
+        """Compile handler to native code.
 
         Args:
-            signature: Request signature to optimize for.
-            handler: Original WSGI handler.
-            trace: Recorded trace if available.
+            signature: Request signature (used as cache key).
+            handler: Original WSGI handler to compile.
+            trace: Recorded trace (currently unused, handler AST is used).
 
         Returns:
-            Optimized callable.
+            Callable that executes native code when possible.
         """
-        # Check if already optimized
-        if signature in self._optimized:
-            return self._create_optimized_wrapper(self._optimized[signature])
+        # Check if already compiled
+        if signature in self._compiled:
+            return self._create_native_wrapper(self._compiled[signature])
 
-        # Optimize: Compile trace if available
-        # NOTE: Current TraceLowerer generates placeholder IR, not full WSGI handler code.
-        # Native execution is disabled until lowerer can generate complete handler logic.
-        # Compilation still happens (for metrics/validation), but execution uses original handler.
-        compiled_func = None
-        if trace:
-            try:
-                from pyaot.web.codegen.compiler import TraceCompiler
+        start_time = time.perf_counter()
 
-                compiler = TraceCompiler(optimization_level=2)
-                artifact = compiler.compile(trace)
+        # Create unique callsite ID
+        callsite_id = f"web:{signature.http_method}:{signature.path_template}"
 
-                # Compilation succeeded - record for metrics
-                # But DON'T use native code for execution yet (signature mismatch)
-                # The lowerer produces int64(int64), not PyObject*(PyObject*, PyObject*)
-                # compiled_func remains None - we use original handler
+        # Attempt native compilation
+        artifact = None
+        if self.is_native_available:
+            # compile_for_inline handles:
+            # 1. Checking if handler can be compiled
+            # 2. Creating guards from sample args
+            # 3. Lowering to IR
+            # 4. Compiling to native
+            artifact = compile_for_inline(
+                callee=handler,
+                callsite_id=callsite_id,
+                sample_args=(),  # WSGI handlers take (environ, start_response)
+            )
 
-                # Store artifact reference for future use
-                handler._compiled_artifact = artifact
-            except Exception:
-                # Compilation failed
-                pass
-
-        opt_handler = OptimizedHandler(
-            signature=signature,
-            original_handler=compiled_func if compiled_func else handler,
-            cached_headers=[],
-        )
-
-        # For GET requests, try response caching
-        if signature.http_method == "GET":
-            opt_handler.is_cacheable = True
-
-        self._optimized[signature] = opt_handler
+        compile_time_ms = (time.perf_counter() - start_time) * 1000
+        self._total_compile_time_ms += compile_time_ms
         self._compile_count += 1
 
-        # Return optimized wrapper
-        return self._create_optimized_wrapper(opt_handler)
+        # Create compiled handler record
+        compiled = CompiledHandler(
+            signature=signature,
+            artifact=artifact,
+            original_handler=handler,
+            compile_time_ms=compile_time_ms,
+        )
+        self._compiled[signature] = compiled
 
-    def _create_optimized_wrapper(
-        self, opt_handler: OptimizedHandler
+        return self._create_native_wrapper(compiled)
+
+    def _create_native_wrapper(
+        self, compiled: CompiledHandler
     ) -> Callable[[dict, Callable], Iterator[bytes]]:
-        """Create optimized WSGI wrapper."""
+        """Create WSGI wrapper that uses native code when available.
 
-        # Capture for closure
-        target_handler = opt_handler.original_handler
-        is_cacheable = opt_handler.is_cacheable
-        cache = self._response_cache
-        sig_key = opt_handler.signature.to_tuple()
+        If guards pass: executes native code
+        If guards fail or no artifact: executes original Python handler
+        """
+        handler = compiled.original_handler
+        artifact = compiled.artifact
 
-        # Fast path for non-cacheable requests (POST/PUT/DELETE)
-        # Zero overhead - direct passthrough to original handler
-        if not is_cacheable:
-
-            def fast_wsgi(
+        if artifact is None:
+            # No native code - direct passthrough (zero overhead)
+            def passthrough_wsgi(
                 environ: dict[str, Any], start_response: Callable
             ) -> Iterator[bytes]:
-                """Zero-overhead passthrough for non-cacheable requests."""
-                return target_handler(environ, start_response)
+                return handler(environ, start_response)
 
-            return fast_wsgi
+            return passthrough_wsgi
 
-        def optimized_wsgi(
+        # Native code available - use GuardedArtifact
+        def native_wsgi(
             environ: dict[str, Any], start_response: Callable
         ) -> Iterator[bytes]:
-            """Optimized WSGI handler for cacheable (GET) requests."""
-            # Check cache
-            path = environ.get("PATH_INFO", "")
-            query = environ.get("QUERY_STRING", "")
-            cache_key = (sig_key, path, query)
+            """Execute native code with guard checks."""
+            # GuardedArtifact.__call__ handles:
+            # - Guard checking
+            # - Native execution when guards pass
+            # - Fallback to Python when guards fail
+            # - Statistics tracking
+            try:
+                result = artifact(environ, start_response)
+                compiled.native_calls += 1
+                return result
+            except Exception:
+                # On any error, fall back to Python
+                compiled.fallback_calls += 1
+                return handler(environ, start_response)
 
-            if cache_key in cache:
-                status, headers, body = cache[cache_key]
-                start_response(status, headers)
-                return iter([body])
+        return native_wsgi
 
-            # Cacheable Miss: Capture response
-            captured_status = None
-            captured_headers = None
+    def get_compiled(
+        self, signature: RequestSignature
+    ) -> Optional[CompiledHandler]:
+        """Get compiled handler for signature."""
+        return self._compiled.get(signature)
 
-            def capturing_start_response(status, headers, exc_info=None):
-                nonlocal captured_status, captured_headers
-                captured_status = status
-                captured_headers = list(headers)
-                return start_response(status, headers, exc_info)
+    def get_statistics(self) -> dict[str, Any]:
+        """Get compilation statistics."""
+        total_native = sum(c.native_calls for c in self._compiled.values())
+        total_fallback = sum(c.fallback_calls for c in self._compiled.values())
+        total_calls = total_native + total_fallback
 
-            # Execute handler with capture
-            result = target_handler(environ, capturing_start_response)
-
-            # Consume and cache
-            if captured_status and captured_status.startswith("2"):
-                body_parts = list(result)
-                body = b"".join(body_parts)
-                cache[cache_key] = (captured_status, captured_headers, body)
-                result = iter([body])
-
-            return result
-
-        return optimized_wsgi
-
-    def get_optimized(self, signature: RequestSignature) -> Callable | None:
-        """Get optimized handler for signature.
-
-        Args:
-            signature: Request signature.
-
-        Returns:
-            Optimized handler or None.
-        """
-        opt = self._optimized.get(signature)
-        if opt:
-            return self._create_optimized_wrapper(opt)
-        return None
-
-    def invalidate(self, signature: RequestSignature) -> bool:
-        """Invalidate optimized handler.
-
-        Args:
-            signature: Signature to invalidate.
-
-        Returns:
-            True if was cached.
-        """
-        if signature in self._optimized:
-            del self._optimized[signature]
-            sig_key = signature.to_tuple()
-            self._response_cache.pop(sig_key, None)
-            return True
-        return False
-
-    def get_stats(self) -> dict[str, Any]:
-        """Get optimization statistics."""
-        total_calls = sum(o.call_count for o in self._optimized.values())
-        total_time = sum(o.total_time_ns for o in self._optimized.values())
+        native_compiled = sum(
+            1 for c in self._compiled.values() if c.artifact is not None
+        )
 
         return {
-            "optimized_handlers": len(self._optimized),
-            "cached_responses": len(self._response_cache),
-            "total_calls": total_calls,
-            "total_time_ms": total_time / 1_000_000,
-            "avg_time_us": (total_time / total_calls / 1000) if total_calls > 0 else 0,
-            "compile_count": self._compile_count,
+            "compiled_handlers": len(self._compiled),
+            "native_compiled": native_compiled,
+            "total_native_calls": total_native,
+            "total_fallback_calls": total_fallback,
+            "native_ratio": total_native / total_calls if total_calls > 0 else 0.0,
+            "total_compile_time_ms": self._total_compile_time_ms,
+            "avg_compile_time_ms": (
+                self._total_compile_time_ms / self._compile_count
+                if self._compile_count > 0
+                else 0.0
+            ),
         }
