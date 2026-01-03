@@ -12,28 +12,49 @@ from dataclasses import dataclass
 from typing import Any
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class RequestSignature:
     """Stable abstraction of an HTTP request.
 
     Used to group requests that should share the same compiled trace.
     Never includes raw values - only shapes and types.
-
-    Attributes:
-        http_method: HTTP method (GET, POST, etc.)
-        path_template: Route template (e.g., /users/<int:id>)
-        auth_state: Authentication state (authenticated, anonymous, etc.)
-        param_types: Types of URL/query parameters
-        header_shape_hash: Hash of header key structure
-        body_shape_hash: Hash of body structure (for JSON)
     """
 
     http_method: str
     path_template: str
     auth_state: str
-    param_types: tuple[tuple[str, str], ...]  # (name, type_name)
+    param_types: tuple[tuple[str, str], ...]
     header_shape_hash: str
     body_shape_hash: str
+
+    def update(
+        self,
+        method: str,
+        path_template: str,
+        params: dict[str, Any],
+        headers: dict[str, str],
+        body: Any,
+        auth_state: str = "unknown",
+   ) -> None:
+        """Update fields in-place for pooling."""
+        # Extract parameter types
+        param_types = tuple(
+            (name, type(value).__name__) for name, value in sorted(params.items())
+        )
+
+        # Hash header structure
+        header_keys = tuple(sorted(headers.keys()))
+        header_shape_hash = _compute_shape_hash(header_keys)
+
+        # Hash body structure
+        body_shape_hash = _compute_body_shape_hash(body)
+
+        self.http_method = method.upper()
+        self.path_template = path_template
+        self.auth_state = auth_state
+        self.param_types = param_types
+        self.header_shape_hash = header_shape_hash
+        self.body_shape_hash = body_shape_hash
 
     @classmethod
     def from_request(
@@ -45,39 +66,13 @@ class RequestSignature:
         body: Any,
         auth_state: str = "unknown",
     ) -> "RequestSignature":
-        """Create a signature from request data.
-
-        Args:
-            method: HTTP method
-            path_template: Route template
-            params: URL/query parameters
-            headers: HTTP headers
-            body: Request body (parsed)
-            auth_state: Authentication state
-
-        Returns:
-            A stable RequestSignature
-        """
-        # Extract parameter types (not values)
-        param_types = tuple(
-            (name, type(value).__name__) for name, value in sorted(params.items())
-        )
-
-        # Hash header structure (keys only, sorted)
-        header_keys = tuple(sorted(headers.keys()))
-        header_shape_hash = _compute_shape_hash(header_keys)
-
-        # Hash body structure
-        body_shape_hash = _compute_body_shape_hash(body)
-
-        return cls(
-            http_method=method.upper(),
-            path_template=path_template,
-            auth_state=auth_state,
-            param_types=param_types,
-            header_shape_hash=header_shape_hash,
-            body_shape_hash=body_shape_hash,
-        )
+        """Create a signature from request data."""
+        # Create empty instance then update
+        # Requires default values if avoiding init?
+        # We'll just init normally for new creations
+        sig = cls("GET", "/", "unknown", (), "", "")
+        sig.update(method, path_template, params, headers, body, auth_state)
+        return sig
 
     def to_tuple(self) -> tuple[str, str, str, tuple[tuple[str, str], ...], str, str]:
         """Convert to hashable tuple."""

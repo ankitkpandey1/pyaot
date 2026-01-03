@@ -26,6 +26,7 @@ from pyaot.web.trace.store import TraceStore
 from pyaot.web.trace.eligibility import EligibilityEvaluator
 from pyaot.web.codegen.compiler import TraceCompiler
 from pyaot.web.ops.metrics import get_metrics
+from pyaot.web.ops.pool import ObjectPool
 from pyaot.web.route.trie import RouteLearner
 
 if TYPE_CHECKING:
@@ -99,8 +100,11 @@ class WSGIMiddleware:
         self._compiled_traces: dict[RequestSignature, Any] = {}
         self._pending_compilation: set[RequestSignature] = set()
         
-        # Route learning
+        # Route learning and pooling
         self._router = RouteLearner()
+        self._sig_pool = ObjectPool(
+            lambda: RequestSignature("GET", "/", "unknown", (), "", "")
+        )
 
     def __call__(
         self,
@@ -115,7 +119,7 @@ class WSGIMiddleware:
         method = environ.get("REQUEST_METHOD", "GET")
         path = environ.get("PATH_INFO", "/")
         path_template = self._router.extract_and_learn(path)
-        signature = self._build_signature(environ, path_template)
+        signature = self._get_signature(environ, path_template)
         route_id = f"wsgi:{method}:{path_template}"
         client_ip = self._get_client_ip(environ)
 
@@ -125,6 +129,8 @@ class WSGIMiddleware:
         compiled = self._compiled_traces.get(signature)
         if compiled is not None:
              # Execute compiled trace (native code wrapper)
+             # Return signature to pool (steady state)
+             self._sig_pool.put(signature)
              return compiled(environ, start_response)
 
         # Phase 2: Record trace during CPython execution
@@ -177,19 +183,18 @@ class WSGIMiddleware:
         finally:
             self._pending_compilation.discard(signature)
 
-    def _build_signature(self, environ: dict[str, Any], path_template: str) -> RequestSignature:
-        """Build RequestSignature from WSGI environ (Optimized)."""
+    def _get_signature(self, environ: dict[str, Any], path_template: str) -> RequestSignature:
+        """Get RequestSignature from pool and update."""
+        sig = self._sig_pool.get()
+        
         method = environ.get("REQUEST_METHOD", "GET")
-        # path_template passed in
-
+        
         # Optimize: Extract header keys directly for shape hash
-        # Avoid creating full headers dict
         header_keys = []
         has_auth = False
         
         for key in environ:
             if key.startswith("HTTP_"):
-                # Transform HTTP_USER_AGENT -> User-Agent
                 header_keys.append(key[5:].replace("_", "-").title())
                 if key == "HTTP_AUTHORIZATION":
                     has_auth = True
@@ -198,7 +203,6 @@ class WSGIMiddleware:
 
         header_keys.sort()
         header_shape_hash = hashlib.md5("|".join(header_keys).encode()).hexdigest()[:16]
-
         auth_state = "authenticated" if has_auth else "anonymous"
 
         # Parse query params for types
@@ -209,15 +213,18 @@ class WSGIMiddleware:
                 if "=" in part:
                     k, v = part.split("=", 1)
                     params[k] = v
+        
+        param_types = tuple(sorted((k, type(v).__name__) for k, v in params.items()))
 
-        return RequestSignature(
-            http_method=method.upper(),
-            path_template=path_template,
-            auth_state=auth_state,
-            param_types=tuple(sorted((k, type(v).__name__) for k, v in params.items())),
-            header_shape_hash=header_shape_hash,
-            body_shape_hash="",  # Would need to read body
-        )
+        # Update in-place
+        sig.http_method = method.upper()
+        sig.path_template = path_template
+        sig.auth_state = auth_state
+        sig.param_types = param_types
+        sig.header_shape_hash = header_shape_hash
+        sig.body_shape_hash = ""
+        
+        return sig
 
     def _get_client_ip(self, environ: dict[str, Any]) -> str:
         """Extract client IP from WSGI environ."""
@@ -268,6 +275,9 @@ class ASGIMiddleware:
         self._metrics = get_metrics()
         self._enabled = True
         self._router = RouteLearner()
+        self._sig_pool = ObjectPool(
+            lambda: RequestSignature("GET", "/", "unknown", (), "", "")
+        )
 
     async def __call__(
         self,
@@ -286,12 +296,23 @@ class ASGIMiddleware:
 
         # Build signature
         path_template = self._router.extract_and_learn(path)
-        signature = self._build_signature(scope, path_template)
+        signature = self._get_signature(scope, path_template)
         route_id = f"asgi:{method}:{path_template}"
         client_ip = self._get_client_ip(scope)
 
         # Record trace
         start_time = time.perf_counter()
+        
+        # Note: For ASGI we can't easily pool/return because trace usage is async/complex?
+        # Or we can check compiled traces here too (Milestone 1+2 didn't implement compilation for ASGI?)
+        # Wait, generic.py ASGIMiddleware HAS NO COMPILATION CHECK!
+        # It only records trace?
+        # Lines 315-344.
+        # It is missing `_compiled_traces` usage!
+        # Since I'm here, I should probably add it, or leave it.
+        # Milestone 2 was Route Compilation.
+        # I will leave ASGI as Tracking-Only for now (focus on WSGI optimization).
+        # But I still need _get_signature to work.
 
         with self._recorder.trace_request(route_id, signature, client_ip):
             await self._app(scope, receive, send)
@@ -299,8 +320,10 @@ class ASGIMiddleware:
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         self._metrics.record_execution(route_id, elapsed_ms)
 
-    def _build_signature(self, scope: dict[str, Any], path_template: str) -> RequestSignature:
-        """Build RequestSignature from ASGI scope."""
+    def _get_signature(self, scope: dict[str, Any], path_template: str) -> RequestSignature:
+        """Get RequestSignature from pool and update."""
+        sig = self._sig_pool.get()
+        
         method = scope.get("method", "GET")
         # path_template passed in
 
@@ -311,6 +334,8 @@ class ASGIMiddleware:
 
         # Auth state
         auth_state = "authenticated" if headers.get("Authorization") else "anonymous"
+        header_keys = tuple(sorted(headers.keys()))
+        header_shape_hash = _compute_header_shape(headers)
 
         # Query params
         query = scope.get("query_string", b"").decode()
@@ -321,14 +346,15 @@ class ASGIMiddleware:
                     k, v = part.split("=", 1)
                     params[k] = v
 
-        return RequestSignature(
-            http_method=method.upper(),
-            path_template=path_template,
-            auth_state=auth_state,
-            param_types=tuple(sorted((k, type(v).__name__) for k, v in params.items())),
-            header_shape_hash=_compute_header_shape(headers),
-            body_shape_hash="",
-        )
+        # Update
+        sig.http_method = method.upper()
+        sig.path_template = path_template
+        sig.auth_state = auth_state
+        sig.param_types = tuple(sorted((k, type(v).__name__) for k, v in params.items()))
+        sig.header_shape_hash = header_shape_hash
+        sig.body_shape_hash = ""
+        
+        return sig
 
     def _get_client_ip(self, scope: dict[str, Any]) -> str:
         """Extract client IP from ASGI scope."""
