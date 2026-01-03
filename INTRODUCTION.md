@@ -524,6 +524,128 @@ graph TD
 
 ---
 
+## Deep Dive: The Eligibility Whitelist
+
+PyAOT uses **static AST analysis** with a **conservative whitelist** to determine which functions can be compiled. This section explains exactly how it works.
+
+### How PyAOT Detects "Leaf" Functions
+
+A **leaf function** is one that contains only:
+- Arithmetic operations (`+`, `-`, `*`, `/`, `**`)
+- Comparisons (`<`, `>`, `==`, etc.)
+- Local variable access
+- Calls to **whitelisted** builtins and modules
+
+PyAOT does **NOT** dynamically detect I/O vs compute. Instead, it uses a strict allowlist:
+
+```python
+# From pyaot/inline/eligibility.py
+
+WHITELISTED_BUILTINS = {
+    'abs', 'min', 'max', 'sum', 'len', 'range', 'enumerate', 'zip',
+    'int', 'float', 'bool', 'str', 'round', 'pow',
+}
+
+WHITELISTED_MODULES = {
+    'math',    # math.sin, math.sqrt, etc.
+    'numpy',   # np.sum, np.dot, etc.
+    'operator', # operator.add, etc.
+}
+```
+
+### Eligible vs. Ineligible Examples
+
+| Function | Eligible? | Reason |
+|----------|-----------|--------|
+| `def f(x): return x * 2 + 1` | ✅ Yes | Pure arithmetic |
+| `def f(x): return math.sin(x)` | ✅ Yes | `math` is whitelisted |
+| `def f(arr): return np.sum(arr)` | ✅ Yes | `numpy` is whitelisted |
+| `def f(x): return abs(x) + max(x, 0)` | ✅ Yes | Whitelisted builtins |
+| `def f(x): print(x)` | ❌ No | `print` not whitelisted |
+| `def f(x): return requests.get(x)` | ❌ No | `requests` not whitelisted |
+| `def f(ds_id): return DataModel.get(ds_id)` | ❌ No | ORM call not whitelisted |
+| `def f(x): open('file.txt').read()` | ❌ No | `open` not whitelisted |
+| `async def f(x): await foo()` | ❌ No | Coroutines rejected |
+| `def f(*args): return sum(args)` | ❌ No | `*args` not supported |
+
+### Why Your ORM Function Won't Compile
+
+Consider this common pattern:
+
+```python
+def serve(ds_id: int):
+    d = DataModel.get_by_id(ds_id)  # ← NOT whitelisted
+    d.out = True                     # ← Attribute on unknown object
+    orm_session.commit()             # ← NOT whitelisted
+```
+
+PyAOT's AST visitor walks the function and finds:
+1. `DataModel.get_by_id()` → `DataModel` not in `WHITELISTED_MODULES` → **REJECTED**
+
+The function is immediately marked as **ineligible**. Even if it were somehow eligible, the I/O-bound database calls would nullify any speedup.
+
+### The Conservative Philosophy
+
+PyAOT uses a **sound approximation**:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    All Python Functions                      │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │     Functions with side effects (I/O, network, DB)    │  │
+│  │  ┌─────────────────────────────────────────────────┐  │  │
+│  │  │      Functions calling unknown code             │  │  │
+│  │  │  ┌───────────────────────────────────────────┐  │  │  │
+│  │  │  │  Pure numerical functions (COMPILABLE)   │  │  │  │
+│  │  │  └───────────────────────────────────────────┘  │  │  │
+│  │  └─────────────────────────────────────────────────┘  │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Guarantees:**
+- ✅ All I/O functions are rejected (no false positives)
+- ✅ All side-effect functions are rejected (safe)
+- ⚠️ Some pure functions may also be rejected (false negatives, but safe)
+
+This is intentional: **it's better to miss an optimization opportunity than to break a program**.
+
+### The AST Analysis Process
+
+```python
+# Simplified from pyaot/inline/eligibility.py
+
+class CallVisitor(ast.NodeVisitor):
+    def visit_Call(self, node):
+        if isinstance(node.func, ast.Name):
+            # Direct function call: foo()
+            if node.func.id not in WHITELISTED_BUILTINS:
+                self.reject(f"calls non-whitelisted: {node.func.id}")
+        
+        elif isinstance(node.func, ast.Attribute):
+            # Method call: module.func()
+            if node.func.value.id not in WHITELISTED_MODULES:
+                self.reject(f"calls non-whitelisted: {node.func.value.id}.{node.func.attr}")
+    
+    def visit_Yield(self, node):
+        self.reject("contains yield")
+    
+    def visit_Await(self, node):
+        self.reject("contains await")
+```
+
+### Adding Custom Whitelists (Future)
+
+Currently, the whitelist is hardcoded. A future version may support:
+
+```python
+# Hypothetical future API
+pyaot.config.add_whitelisted_module('custom_math')
+pyaot.config.add_whitelisted_builtin('my_pure_function')
+```
+
+---
+
 ## Guard Failure Example
 
 What happens if types change at runtime?
