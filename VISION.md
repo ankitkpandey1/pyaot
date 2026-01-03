@@ -2,6 +2,8 @@
 
 > **Mission**: Compile *observed request execution traces*, not Python code, turning real production traffic into guarded native pipelines with zero semantic risk.
 
+PyAOT-Web compiles observed request traces (with guards and deopt), not arbitrary Python code — prioritizing correctness and gradual rollout while delivering native hot-path latency improvements.
+
 ---
 
 ## The Key Insight
@@ -41,7 +43,7 @@ Per-request interpreter overhead:
 └── TOTAL                               = 15-35μs
 ```
 
-**Target**: 1μs per request (1M req/sec)
+**Target**: ~1μs **handler CPU work** for hot-path code (excludes network/DB I/O). End-to-end P99 depends on I/O and network.
 
 ---
 
@@ -78,12 +80,13 @@ Per-request interpreter overhead:
 
 ### Resource Limits
 
-| Resource | Limit |
-|----------|-------|
-| Guard overhead | < 100ns per trace entry |
-| Compilation overhead | < 5% startup time |
-| Memory overhead | < 20% |
-| Guard miss handling | < 500ns fallback |
+| Resource | Limit | Notes |
+|----------|-------|-------|
+| Guard microbudget | target <200–500ns per guard check | validate on hardware |
+| Guard miss handling | expected single-digit µs to transfer to interpreter | minimize by lowering miss rate |
+| Compilation overhead | < 5% startup time | |
+| Memory overhead | < 20% | |
+| Trace compilation time | < 100ms (goal/optimistic) | requires measured CI validation |
 
 ---
 
@@ -173,15 +176,9 @@ TRACE:
   return 200
 ```
 
-**Trace B (cold, 5%)**
-```
-auth failed → fallback to Python
-```
+**Trace B (cold, 5%)**: auth failed → fallback to Python
 
-**Trace C (cold, 5%)**  
-```
-user not found → fallback to Python
-```
+**Trace C (cold, 5%)**: user not found → fallback to Python
 
 **Result**: Hot path is native, cold paths stay Python. Safety intact.
 
@@ -203,7 +200,6 @@ Records during observation:
 Bounded by route + request signature.
 
 ```python
-# Produces:
 TraceRecord(
     route='/api/user/<id>',
     signature=('int',),
@@ -232,6 +228,8 @@ RETURN r3
 
 Then lower Trace IR → LLVM IR.
 
+Trace IR should be serializable and versioned. Include a canonicalizer pass to coalesce equivalent guards across traces.
+
 This enables:
 - Branch weighting
 - Allocation removal (scalar replacement)
@@ -258,11 +256,9 @@ fallback:
 Requirements:
 - Stub must be < 20 instructions
 - Predictable branch layout
-- Guard miss cost < 100ns
+- Guard coalescing optimization: merge initial guard sets across traces to reduce stub overhead
 
-### 4. Allocation Strategy (Corrected)
-
-**Priority order:**
+### 4. Allocation Strategy (Priority Order)
 
 1. **Scalar replacement** — Split objects into registers
 2. **Stack allocation** — Short-lived, non-escaping objects
@@ -270,139 +266,164 @@ Requirements:
 
 Most web handlers allocate *logically*, not *physically*. Scalar replacement handles 80% of cases.
 
-```python
-# Before: allocates dict
-return {'id': user.id, 'name': user.name}
+### 5. Compiler Heuristics
 
-# After scalar replacement: no allocation
-# id and name are in registers, serialized directly
-```
-
-### 5. Guard Miss Tracking
-
-Guard miss rate is a **first-class metric**:
-
-```python
-@dataclass
-class TraceStats:
-    trace_id: str
-    executions: int
-    guard_misses: int
-    miss_rate: float  # If > 5%, consider retracing
-```
-
-If miss rate exceeds threshold → trigger re-profiling and recompilation.
+| Heuristic | Threshold |
+|-----------|-----------|
+| Inline callees | call_count > 1000 AND callee_size < 50 IR ops AND guard_miss_rate < 2% |
+| Max inline depth | 4 levels to avoid code bloat |
+| Scalar replacement | object fields used < 5 times AND does not escape |
+| Dict → tuple conversion | ≤3 keys, all string literals |
+| Memory pools | emit for common shapes; fallback to PyObjects on miss |
 
 ---
 
-## GIL Strategy (Realistic)
+## Engineering Controls
 
-### Phase 1: Hold GIL, Reduce Traffic
+### Trace Validity Testing (Difftest)
 
-Native trace runs **while holding GIL**, but:
-- No Python API calls in hot path
-- No refcount operations (scalar replacement)
-- No object allocations
+Automated equivalence runner:
+- Execute N recorded traces on both interpreter and compiled code
+- Compare outputs byte-for-byte (JSON body + status code + headers)
+- Fuzz-mode: mutate inputs to find edge cases
+- Run on every CI build
 
-This reduces contention dramatically without GIL bypass complexity.
+### Deterministic Recording Format
 
-### Phase 2: Sub-Interpreter Isolation (Future)
+Trace record format (protobuf or flatbuffers):
+- Route ID
+- Input bytes (headers, body hash)
+- Branch map with taken/not-taken
+- Attribute offsets accessed
+- Resolved call addresses
+- Timestamps
+- Sampled stack trace
+- Checksum + format version
 
-Move traces to per-interpreter model (PEP 684):
-- Each worker gets own interpreter
-- No shared GIL
-- True parallelism
+### Safe Rollout / Canary Model
 
-This is realistic and SOTA-2026.
+- Compiled artifacts must be signed and versioned
+- Runtime supports percentage rollout (e.g., 1% → 10% → 100%)
+- Per-route enable flags
+- Auto-disable if guard_miss_rate or error_rate spike above threshold
+- Metrics-driven rollback
 
----
+### Security Considerations
 
-## I/O Reality Check
+Threat model:
+- Attacker submits malicious headers/inputs to trigger abnormal traces
+- Trace poisoning could cause wrong guards to be compiled
 
-### Cannot Compile
-
-- Full database access end-to-end
-- Network I/O
-- File system operations
-
-### Can Compile
-
-- **Result decoding**: row → object → dict
-- **Serialization**: object → JSON bytes
-- **Validation**: request → validated params
-
-These alone yield large wins (50-100% improvement).
-
----
-
-## Comparison: Before and After
-
-### Current PyAOT (v0.x)
-
-```
-Scope: Leaf numerical functions only
-Model: Compile function → LLVM
-Guard: Type guards on arguments
-```
-
-### PyAOT-Web (v1.0)
-
-```
-Scope: Request execution traces
-Model: Record trace → Trace IR → LLVM
-Guard: Type + Shape + Branch + Call guards
-Multi-trace: Hot/cold path separation
-```
+Mitigations:
+- Only compile traces above high confidence threshold (e.g., >1000 observations)
+- Require multiple independent observations matching same pattern
+- Hash inputs and reject outlier signatures
+- Sign compiled artifacts
 
 ---
 
-## Implementation Phases
+## Trace Lifecycle & Invalidation
 
-| Phase | Subsystem | Impact |
-|-------|-----------|--------|
-| 1 | Trace Recorder | Foundation |
-| 2 | Trace IR + Lowering | Core compilation |
-| 3 | Guard generation | Safety |
-| 4 | Scalar replacement | Allocation elimination |
-| 5 | Branch weighting | Prediction optimization |
-| 6 | Result decoding specialization | I/O edge gains |
+**Guard-miss rate is the primary control knob.**
+
+| Trigger | Action |
+|---------|--------|
+| Code deploy (CI artifact bump) | Invalidate all traces for changed routes |
+| guard_miss_rate > 5% for 5 minutes | Trigger re-profiling |
+| New shape observed (new attr offset, new call target) above support count | Extend or replace trace |
+| TTL (24-72 hours) | Re-evaluate trace validity |
+| Manual flag | Force retrace via admin API |
+
+---
+
+## Observability Metrics
+
+First-class metrics (wire to dashboards and SLOs):
+
+| Metric Name | Type | Description |
+|-------------|------|-------------|
+| `py_aot.trace.executions` | counter | Total trace executions |
+| `py_aot.trace.guard_misses` | counter | Guard check failures |
+| `py_aot.trace.guard_miss_rate` | gauge | guard_misses / executions |
+| `py_aot.trace.compilation_time_ms` | histogram | Time to compile trace |
+| `py_aot.trace.compiled_hit_rate` | gauge | Requests served by native traces |
+| `py_aot.trace.fallback_rate` | gauge | Requests that fell back to Python |
+| `py_aot.perf.cpu_ns_per_request_hotpath` | histogram | CPU time in native hot path |
+| `py_aot.memory.arena_alloc_bytes_per_request` | histogram | Arena memory per request |
+
+**Alert thresholds**:
+- `guard_miss_rate > 5%` → trigger retrace
+- `guard_miss_rate > 15%` → auto-disable trace, rollback to Python
+- `fallback_rate > 50%` → investigate trace coverage
+
+---
+
+## Deployment Model
+
+- **Stable routes**: Prefer simple precompilation in CI for routes that rarely change
+- **Dynamic workloads**: Live AOT compilation based on runtime observation
+- **Developer hint API** (optional): `@py_aot.hint(stable=True)` to mark high-confidence code for eager compilation
+
+---
+
+## Testing & Validation Checklist
+
+| Category | Requirement |
+|----------|-------------|
+| Microbench | TechEmpower-style benchmark: branch-heavy, allocation-heavy, attr-heavy handlers |
+| Real-app | Run on 3 apps: FastAPI hello+db, Django list endpoint, Flask form validation |
+| Equivalence | 100% deterministic difftest on N most common routes |
+| Chaos | Inject guard-miss spikes, verify safe fallback, no data loss |
+| Performance | Measure guard check overhead on target hardware |
+
+---
+
+## Implementation Phases (0-12 Weeks)
+
+### Week 0–2: Trace Recorder Prototype
+- [ ] Implement minimal TraceRecorder (per-route, record branch & attr offsets)
+- [ ] Define storage schema (protobuf)
+- [ ] Add ingest pipeline
+
+### Week 2–6: Trace IR + Naive Lowering
+- [ ] Define Trace IR opcodes
+- [ ] Implement TraceIR → naive LLVM lowering (no optimizations)
+- [ ] Add guard stub generator
+- [ ] Basic end-to-end: record → compile → execute
+
+### Week 6–10: Difftest + Benchmarks
+- [ ] Integrate difftest harness
+- [ ] Add equivalence tests for recorded traces
+- [ ] Run TechEmpower-style microbenchmark
+- [ ] Measure baseline guard overhead
+
+### Week 10–12: Optimizations + Canary
+- [ ] Implement scalar replacement
+- [ ] Add simple inlining heuristics
+- [ ] Measure guard miss rates and compiled hit rates
+- [ ] Deploy canary with 1% traffic
 
 ---
 
 ## Success Metrics
 
-| Metric | Baseline | Target |
-|--------|----------|--------|
-| Hot path latency | 500μs | 50μs |
-| Guard miss rate | N/A | < 5% |
-| Trace compilation time | N/A | < 100ms |
-| Fallback cost | N/A | < 500ns |
-| Requests/sec | 5K | 50K |
-
----
-
-## Why This Architecture is Credible
-
-Aligns with proven systems:
-- **HotSpot**: Tiered compilation, trace-based optimization
-- **LuaJIT**: Trace recording, guard-based execution
-- **V8 TurboFan**: Speculative optimization with deopt
-- **CPython PEP 659**: Adaptive specialization
-
-Avoids common mistakes:
-- ❌ "Compile all Python" fantasy
-- ❌ Unsound static typing assumptions
-- ❌ Framework-specific hacks
-- ❌ GIL bypass before basic optimization
+| Metric | Baseline | Target (Goal) | Target (Validated) |
+|--------|----------|---------------|-------------------|
+| Hot path CPU time | 500μs | 50μs | TBD (measure) |
+| Guard miss rate | N/A | < 5% | TBD (measure) |
+| Trace compilation time | N/A | < 100ms | TBD (measure) |
+| Guard check overhead | N/A | < 500ns | TBD (measure) |
+| Compiled hit rate | 0% | > 80% | TBD (measure) |
+| Requests/sec | 5K | 50K | TBD (measure) |
 
 ---
 
 ## Open Questions
 
 1. **Trace recording granularity**: Per-route? Per-signature? Per-branch-path?
-2. **Trace invalidation**: When to re-record after code changes?
+2. **Trace invalidation policy**: How aggressive on code changes?
 3. **Framework integration**: Hooks for Flask/FastAPI/Django?
-4. **Observability**: How to expose trace stats to developers?
+4. **Guard coalescing**: Best strategy for multi-trace routes?
 
 ---
 
