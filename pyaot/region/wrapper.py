@@ -7,6 +7,8 @@ import inspect
 from dataclasses import dataclass
 from typing import Any, Callable, Generic, TypeVar, Optional
 from pyaot.region.tracer import get_tracer, TraceData
+from pyaot.region.compiler import compile_function
+import pyaot_native
 
 T = TypeVar("T")
 
@@ -63,10 +65,13 @@ class Region(Generic[T]):
         if not self._state.is_compiled and self._state.call_count <= self._config.min_observations:
             # simple trace of types for inputs
             tracer.start_trace(str(id(self)))
-            for i, arg in enumerate(args):
-                tracer.record_type(f"arg_{i}", arg)
-            for k, v in kwargs.items():
-                tracer.record_type(f"kwarg_{k}", v)
+            # Match args to names using signature
+            sig = inspect.signature(self._func)
+            bound = sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+            
+            for name, value in bound.arguments.items():
+                tracer.record_type(name, value)
                 
             # Execute
             try:
@@ -78,8 +83,27 @@ class Region(Generic[T]):
                     
             return result
         
+        # Trigger Compilation?
+        if not self._state.is_compiled and self._state.call_count > self._config.min_observations:
+            try:
+                region_id = f"region_{id(self)}"
+                # Compile and load into pyaot_native
+                # Note: compile_function does both
+                handle = compile_function(self._func, region_id, self._state.traces)
+                self._state.is_compiled = True
+                self._state.native_runner = lambda *a, **k: pyaot_native.run_region(handle, a, k)
+            except Exception as e:
+                # Compilation failed, stick to Python
+                # In prod, log this failure
+                print(f"Compilation/Load failed: {e}")
+                self._state.native_failures += 1
+                # Prevent retry spam
+                if self._state.native_failures >= self._config.max_failures:
+                     # For now, just bump min_observations to retry later or never
+                     self._config.min_observations *= 10
+
         # Phase 2: Native Execution (Dispatch)
-        # TODO: Helper method for dispatch logic to separate mechanics from policy
+        # Helper method for dispatch logic to separate mechanics from policy
         if self._state.is_compiled and self._state.native_runner:
             try:
                 # Optimized native path (simulation for now)

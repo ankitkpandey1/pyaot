@@ -130,6 +130,6 @@ def test_trace_capturing():
     # Should have captured guards for inputs
     arg_guards = [g for g in trace.guards if g.kind == 'type']
     assert len(arg_guards) >= 2
-    assert any(g.target == 'arg_0' and g.expected == int for g in arg_guards)
-    assert any(g.target == 'arg_1' and g.expected == int for g in arg_guards)
+    assert any(g.target == 'x' and g.expected == int for g in arg_guards)
+    assert any(g.target == 'y' and g.expected == int for g in arg_guards)
 
