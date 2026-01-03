@@ -26,27 +26,17 @@ from pyaot.web.trace.store import TraceStore
 from pyaot.web.trace.eligibility import EligibilityEvaluator
 from pyaot.web.codegen.compiler import TraceCompiler
 from pyaot.web.ops.metrics import get_metrics
+from pyaot.web.route.trie import RouteLearner
 
 if TYPE_CHECKING:
     pass
 
-
+# Legacy function removed/deprecated
 def _extract_path_template(path: str) -> str:
-    """Extract path template from URL path.
-
-    Heuristically identifies path parameters:
-    - Numeric segments -> <id>
-    - UUID-like segments -> <uuid>
-
-    Args:
-        path: URL path.
-
-    Returns:
-        Path template with placeholders.
-    """
+    """DEPRECATED: Use RouteLearner.extract_and_learn."""
+    # Fallback implementation
     parts = path.strip("/").split("/")
     template_parts = []
-
     for part in parts:
         if part.isdigit():
             template_parts.append("<id>")
@@ -56,7 +46,6 @@ def _extract_path_template(path: str) -> str:
             template_parts.append("<token>")
         else:
             template_parts.append(part)
-
     return "/" + "/".join(template_parts)
 
 
@@ -109,6 +98,9 @@ class WSGIMiddleware:
         # Optimized handler cache: signature -> optimized callable
         self._compiled_traces: dict[RequestSignature, Any] = {}
         self._pending_compilation: set[RequestSignature] = set()
+        
+        # Route learning
+        self._router = RouteLearner()
 
     def __call__(
         self,
@@ -122,8 +114,9 @@ class WSGIMiddleware:
         # Extract request info
         method = environ.get("REQUEST_METHOD", "GET")
         path = environ.get("PATH_INFO", "/")
-        signature = self._build_signature(environ)
-        route_id = f"wsgi:{method}:{_extract_path_template(path)}"
+        path_template = self._router.extract_and_learn(path)
+        signature = self._build_signature(environ, path_template)
+        route_id = f"wsgi:{method}:{path_template}"
         client_ip = self._get_client_ip(environ)
 
         start_time = time.perf_counter()
@@ -184,11 +177,10 @@ class WSGIMiddleware:
         finally:
             self._pending_compilation.discard(signature)
 
-    def _build_signature(self, environ: dict[str, Any]) -> RequestSignature:
+    def _build_signature(self, environ: dict[str, Any], path_template: str) -> RequestSignature:
         """Build RequestSignature from WSGI environ (Optimized)."""
         method = environ.get("REQUEST_METHOD", "GET")
-        path = environ.get("PATH_INFO", "/")
-        path_template = _extract_path_template(path)
+        # path_template passed in
 
         # Optimize: Extract header keys directly for shape hash
         # Avoid creating full headers dict
@@ -275,6 +267,7 @@ class ASGIMiddleware:
         self._compiler = TraceCompiler()
         self._metrics = get_metrics()
         self._enabled = True
+        self._router = RouteLearner()
 
     async def __call__(
         self,
@@ -292,8 +285,9 @@ class ASGIMiddleware:
         path = scope.get("path", "/")
 
         # Build signature
-        signature = self._build_signature(scope)
-        route_id = f"asgi:{method}:{_extract_path_template(path)}"
+        path_template = self._router.extract_and_learn(path)
+        signature = self._build_signature(scope, path_template)
+        route_id = f"asgi:{method}:{path_template}"
         client_ip = self._get_client_ip(scope)
 
         # Record trace
@@ -305,11 +299,10 @@ class ASGIMiddleware:
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         self._metrics.record_execution(route_id, elapsed_ms)
 
-    def _build_signature(self, scope: dict[str, Any]) -> RequestSignature:
+    def _build_signature(self, scope: dict[str, Any], path_template: str) -> RequestSignature:
         """Build RequestSignature from ASGI scope."""
         method = scope.get("method", "GET")
-        path = scope.get("path", "/")
-        path_template = _extract_path_template(path)
+        # path_template passed in
 
         # Extract headers
         headers = {}
